@@ -1,0 +1,8 @@
+# Dados brutos da OFAC — públicos e baixáveis pelos links em spike-ofac.md.
+# Não versionar (arquivos grandes; o sdn_advanced.xml excede o limite do GitHub).
+ofac-data/*.xml
+ofac-data/*.csv
+ofac-data/*.jsonl
+
+# Mantém o instrumento de benchmark versionado
+!ofac-data/benchmark.py
