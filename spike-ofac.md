@@ -566,6 +566,55 @@ Implementação mínima de medição (só stdlib do Python — `xml.etree.iterpa
 
 A fonte determina a forma dos dados; a política de versões é decisão nossa. Três versões operacionais recuperáveis: `ATUAL`, `ANTERIOR`, `N-2`.
 
+### Diagrama 1 — Ciclo de atualização (baixa a lista toda e cria uma nova versão)
+
+Fluxo executado a cada verificação. Como a OFAC só publica **snapshot completo** (seção 6), quando há mudança baixa-se a lista **inteira** e grava-se como uma **nova versão imutável**, que só vira `ATUAL` após validação.
+
+```mermaid
+flowchart TD
+    Start([Poll periódico - ex. de hora em hora]) --> Head[HEAD no endpoint da lista<br/>lê Last-Modified e Digest sha-256]
+    Head --> Changed{Digest mudou vs.<br/>última versão ingerida?}
+    Changed -- Não --> Skip[Não faz nada<br/>ATUAL permanece válida] --> End1([Fim do ciclo])
+    Changed -- Sim --> Get[GET - baixa o SNAPSHOT COMPLETO<br/>lista inteira, ex. ~120 MB SDN]
+    Get --> Validate[Valida integridade<br/>confere Digest sha-256 + XML bem-formado]
+    Validate -- Inválido --> Fail[Descarta download<br/>ATUAL permanece válida] --> End1
+    Validate -- OK --> Transform[Parseia + transforma<br/>filtra pessoas/entidades, resolve referências]
+    Transform --> Persist[Grava NOVA VERSÃO imutável<br/>id = Publish_Date + Digest]
+    Persist --> Verify{Contagem confere<br/>com Record_Count?}
+    Verify -- Não --> Fail
+    Verify -- Sim --> Activate[Ativa atomicamente:<br/>ponteiro ATUAL passa a apontar a nova versão]
+    Activate --> Retention[Aplica retenção:<br/>N-2 antiga vira COLD/descarte]
+    Retention --> End2([Nova versão ATIVA])
+```
+
+### Diagrama 2 — Rotação de versões por lista (ATUAL / ANTERIOR / N-2)
+
+Cada lista (SDN e Consolidated) versiona de forma **independente**. Toda nova publicação empurra a janela: a nova entra como `ATUAL`, a antiga `ATUAL` vira `ANTERIOR`, e assim por diante. Versões publicadas são **imutáveis** — ativar ou reverter é só trocar o ponteiro `ATUAL`.
+
+```mermaid
+flowchart LR
+    subgraph Antes["Antes da publicação"]
+        direction TB
+        A1["v_n<br/>(ATUAL)"]
+        A2["v_n-1<br/>(ANTERIOR)"]
+        A3["v_n-2<br/>(N-2)"]
+        A1 --- A2 --- A3
+    end
+
+    NEW["Nova publicação<br/>v_n+1 (imutável)"] ==> Depois
+
+    subgraph Depois["Depois da ativação"]
+        direction TB
+        B1["v_n+1<br/>(ATUAL) ← ponteiro"]
+        B2["v_n<br/>(ANTERIOR)"]
+        B3["v_n-1<br/>(N-2)"]
+        B4["v_n-2<br/>(COLD / retido p/ histórico)"]
+        B1 --- B2 --- B3 --- B4
+    end
+```
+
+> **Rollback** = mover o ponteiro `ATUAL` de volta para `ANTERIOR`. Como nenhuma versão é mutada, é uma operação instantânea e segura. Cada lista tem sua própria linha de versões; o mesmo pipeline roda para SDN e Consolidated trocando apenas o endpoint.
+
 - **Identificação única da versão:** usar `Publish_Date` + `Digest` sha-256 do snapshot de origem (ou um id interno + timestamp de ingestão). O `Publish_Date` sozinho não basta (pode haver >1 publicação/dia — ver seção 6), por isso o hash é necessário para desambiguar.
 - **Associação registro→versão:** cada registro carrega a chave da versão em que foi ingerido; o `FixedRef` mantém a identidade da entidade entre versões.
 - **Imutabilidade:** uma versão publicada não deve receber inclusão/alteração/remoção. Nova publicação = nova versão.
