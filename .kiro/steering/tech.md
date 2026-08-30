@@ -10,6 +10,7 @@ Propósito: registrar a stack técnica e os comandos comuns do projeto.
 - **Banco de dados:** PostgreSQL (Data_Store: modelo interno + metadados de versão + ponteiros). Schema em `src/main/resources/db/schema.sql`.
 - **Parsing XML:** StAX (`javax.xml.stream.XMLStreamReader`) — parse em streaming, com memória limitada.
 - **Serialização:** Jackson (módulo Kotlin) para atributos multivalorados em JSONB.
+- **API-first (OpenAPI):** springdoc-openapi expõe `/v3/api-docs` + Swagger UI (`/swagger-ui.html`); `src/main/resources/openapi.yaml` é a **fonte de verdade** e o `OpenApiContractTest` (integrationTest) falha o `check` se o código divergir do contrato.
 
 ## Testes e qualidade
 

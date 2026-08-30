@@ -1,0 +1,303 @@
+openapi: 3.0.1
+info:
+  title: OFAC Sanctions Ingestion — Query API
+  description: "Read-only API over the CURRENT version of each Source_List. Paginated\
+    \ list + case-insensitive contains name search over primary name and aliases.\
+    \ Serves only CURRENT (never PREVIOUS/N_MINUS_2/COLD) and never mutates any version,\
+    \ pointer, or record."
+  license:
+    name: Internal
+    url: https://example.invalid/license
+  version: v1
+tags:
+- name: Query
+  description: Read-only queries over the CURRENT version of a Source_List
+paths:
+  /api/{sourceList}/records:
+    get:
+      tags:
+      - Query
+      summary: List In_Scope_Records from CURRENT (paginated)
+      description: "Returns In_Scope_Records from the CURRENT version of the given\
+        \ Source_List, ordered deterministically by fixedRef, with offset/limit pagination.\
+        \ No CURRENT yet or a page past the end returns an empty page with total 0."
+      operationId: list
+      parameters:
+      - name: sourceList
+        in: path
+        description: Source list to read CURRENT from
+        required: true
+        schema:
+          type: string
+          enum:
+          - SDN
+          - CONSOLIDATED
+        example: SDN
+      - name: offset
+        in: query
+        description: Zero-based row offset (>= 0)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 0
+        example: 0
+      - name: limit
+        in: query
+        description: Page size (1..1000)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 50
+        example: 50
+      responses:
+        "400":
+          description: Invalid pagination or unknown sourceList
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "200":
+          description: A page of records (possibly empty with total 0)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Page"
+  /api/{sourceList}/records/search:
+    get:
+      tags:
+      - Query
+      summary: Search CURRENT by name (case-insensitive contains over primary name
+        + aliases)
+      description: "Returns In_Scope_Records from CURRENT whose primary name OR any\
+        \ alias contains the query string, case-insensitively. Same pagination, bounds,\
+        \ ordering, and metadata as list."
+      operationId: search
+      parameters:
+      - name: sourceList
+        in: path
+        description: Source list to read CURRENT from
+        required: true
+        schema:
+          type: string
+          enum:
+          - SDN
+          - CONSOLIDATED
+        example: SDN
+      - name: q
+        in: query
+        description: Non-empty search term (matched as a case-insensitive substring)
+        required: false
+        schema:
+          type: string
+        example: ivan
+      - name: offset
+        in: query
+        description: Zero-based row offset (>= 0)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 0
+        example: 0
+      - name: limit
+        in: query
+        description: Page size (1..1000)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 50
+        example: 50
+      responses:
+        "200":
+          description: A page of matching records (possibly empty with total 0)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Page"
+        "400":
+          description: "Missing/blank q, invalid pagination, or unknown sourceList"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApiError"
+components:
+  schemas:
+    ApiError:
+      required:
+      - error
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: "limit must be <= 1000, was 5000"
+      description: Client-error body
+    Address:
+      required:
+      - parts
+      - raw
+      type: object
+      properties:
+        raw:
+          type: string
+        country:
+          type: string
+        parts:
+          type: object
+          additionalProperties:
+            type: string
+    Alias:
+      required:
+      - isPrimary
+      - name
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        isPrimary:
+          type: boolean
+    Document:
+      required:
+      - type
+      type: object
+      properties:
+        type:
+          type: string
+        number:
+          type: string
+        issuer:
+          type: string
+    InternalModelEntry:
+      required:
+      - addresses
+      - aliases
+      - birthDates
+      - citizenships
+      - documents
+      - entityType
+      - fixedRef
+      - nationalities
+      - primaryName
+      - relationships
+      - remarks
+      - sanctionPrograms
+      type: object
+      properties:
+        fixedRef:
+          type: string
+        entityType:
+          type: string
+          enum:
+          - Individual
+          - Entity
+        primaryName:
+          type: string
+        aliases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alias"
+        addresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/Address"
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        nationalities:
+          type: array
+          items:
+            type: string
+        citizenships:
+          type: array
+          items:
+            type: string
+        birthDates:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartialDate"
+        sanctionPrograms:
+          type: array
+          items:
+            type: string
+        remarks:
+          type: array
+          items:
+            type: string
+        relationships:
+          type: array
+          items:
+            $ref: "#/components/schemas/Relationship"
+        versionId:
+          $ref: "#/components/schemas/VersionId"
+    Page:
+      required:
+      - limit
+      - offset
+      - records
+      - total
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/InternalModelEntry"
+        total:
+          type: integer
+          format: int64
+        offset:
+          type: integer
+          format: int32
+        limit:
+          type: integer
+          format: int32
+    PartialDate:
+      type: object
+      properties:
+        year:
+          type: integer
+          format: int32
+        month:
+          type: integer
+          format: int32
+        day:
+          type: integer
+          format: int32
+        period:
+          $ref: "#/components/schemas/Period"
+    Period:
+      required:
+      - from
+      - to
+      type: object
+      properties:
+        from:
+          $ref: "#/components/schemas/PartialDate"
+        to:
+          $ref: "#/components/schemas/PartialDate"
+    Relationship:
+      required:
+      - relationType
+      - toFixedRef
+      type: object
+      properties:
+        toFixedRef:
+          type: string
+        relationType:
+          type: string
+    VersionId:
+      required:
+      - digest
+      - publishDate
+      type: object
+      properties:
+        publishDate:
+          type: string
+          format: date
+        digest:
+          type: string

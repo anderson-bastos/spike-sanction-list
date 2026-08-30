@@ -144,16 +144,21 @@ curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:8080/api/SDN/records/
 
 ---
 
-## API-first: postura atual e recomendação
+## API-first: OpenAPI (IMPLEMENTADO)
 
-**Postura atual — _code-first_.** Hoje o contrato HTTP é derivado do código: os endpoints, parâmetros e o shape do `Page` nascem das anotações Spring Web em `QueryController`. **Não há** documento OpenAPI versionado, nem Swagger UI, nem geração de clientes. Esta página é a especificação legível por humanos, mas **não** é um artefato executável/validável.
+A API adota **spec-first (API-first)** com contrato versionado como fonte de verdade e verificação automática contra o código:
 
-**Recomendação — mover para _spec-first_ (API-first).** Para um consumo externo estável, o ideal é o contrato ser a fonte da verdade, e o código ser verificado contra ele:
+- **Fonte de verdade:** `src/main/resources/openapi.yaml` (OpenAPI 3) versionado no repositório. É a autoridade do contrato.
+- **springdoc em runtime:** a app expõe o contrato gerado a partir do código anotado (`QueryController` + o bean `OpenApiConfiguration`) em:
+  - `GET /v3/api-docs` (JSON) e `GET /v3/api-docs.yaml` (YAML)
+  - **Swagger UI** em `GET /swagger-ui.html` — para explorar e testar a API viva.
+- **Teste de contrato (guarda no `check`):** `OpenApiContractTest` (source set `integrationTest`) sobe a app, busca `/v3/api-docs.yaml`, parseia tanto o gerado quanto o `openapi.yaml` versionado como árvore YAML (ignorando o bloco `servers`, específico de ambiente) e **compara semanticamente**. Se o código divergir do contrato (endpoint/param novo ou renomeado, schema alterado), o **build falha** — a mesma disciplina de fitness function do teste de arquitetura ArchUnit.
 
-- **Opção leve (contrato gerado):** adicionar `springdoc-openapi` (`springdoc-openapi-starter-webmvc-ui`) para expor `/v3/api-docs` (OpenAPI 3) e `/swagger-ui.html`. Baixo custo; o contrato passa a ser publicável e navegável. Ainda é code-first no fundo, mas dá um artefato OpenAPI real.
-- **Opção API-first plena (contrato como fonte):** manter um `openapi.yaml` versionado no repositório como **fonte de verdade**, gerar/validar os DTOs e as assinaturas dos controllers a partir dele (ex.: `openapi-generator`), e adicionar um teste de contrato que falha o build se o código divergir do `openapi.yaml`. Encaixa na disciplina de fitness tests já usada no projeto (ver o ArchUnit em `structure.md`).
+**Fluxo ao evoluir a API:** altere as anotações no código, rode a app e capture o doc gerado (`curl -s localhost:8080/v3/api-docs.yaml`), atualize o `openapi.yaml` versionado (removendo o bloco `servers`), e confirme que o `OpenApiContractTest` passa. O `.yaml` é o que se publica para consumidores.
 
-**Status:** ambas são **trabalho futuro não implementado**. Quando priorizado, vira tarefa(s) no `tasks.md` (a opção plena é a mais alinhada ao pedido de "API-first").
+> Explorar o contrato localmente: suba a app (ver `operations.md`) e acesse `http://localhost:8080/swagger-ui.html`.
+
+**Possível evolução futura (não implementada):** geração de **clientes**/DTOs a partir do `openapi.yaml` via `openapi-generator`, e restrição do Swagger UI a um profile (ex.: só `dev`) por postura de exposição. Hoje o Swagger UI fica habilitado por padrão.
 
 ## Estabilidade e versionamento da API
 

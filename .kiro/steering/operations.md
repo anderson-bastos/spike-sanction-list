@@ -36,6 +36,10 @@ Definidos em `src/main/resources/application.yml` e sobrescrevíveis por proprie
 - `ofac.raw-snapshot-store.folder` — pasta do Raw_Snapshot_Store (padrão `./data/raw-snapshot-store`).
 - `spring.datasource.url` / `username` / `password` — conexão do PostgreSQL local.
 
+## Explorar a API (OpenAPI / Swagger)
+
+Com a app no ar: contrato OpenAPI em `http://localhost:8080/v3/api-docs.yaml` e Swagger UI em `http://localhost:8080/swagger-ui.html`. A fonte de verdade do contrato é `src/main/resources/openapi.yaml` (o `OpenApiContractTest` falha o build se o código divergir dela).
+
 ## Particularidade real da OFAC (obtain)
 
 A OFAC anuncia o `Digest` **apenas no HEAD**. O GET **redireciona (302) para o S3**, cuja resposta final **não** repete o header `Digest` (é chunked, sem `Content-Length`). Por isso o pipeline **carrega o digest do HEAD adiante** para o estágio `validate`. O parser de header aceita o formato real `sha-256<hex>` (token colado ao hex, sem `=`), além dos formatos RFC-3230 base64 e hex puro.

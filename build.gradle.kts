@@ -42,6 +42,11 @@ val mockkVersion = "1.13.13"
 val testcontainersVersion = "1.20.4"
 val mockwebserverVersion = "4.12.0"
 
+// springdoc-openapi: exposes the generated OpenAPI 3 doc (/v3/api-docs) + Swagger
+// UI at runtime. The versioned src/main/resources/openapi.yaml is the source of
+// truth; a contract test asserts the generated doc matches it.
+val springdocVersion = "2.6.0"
+
 // ArchUnit — architecture fitness test enforcing the Hexagonal (Ports &
 // Adapters) dependency rule (domain <- application <- adapter). Runs in the
 // normal `test` source set so `check` fails on a layering violation.
@@ -112,6 +117,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
+
+    // --- API-first: springdoc exposes OpenAPI 3 (/v3/api-docs) + Swagger UI ---
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:$springdocVersion")
 
     // --- Jackson Kotlin module: serialize the Internal_Model multi-valued
     //     attributes to JSONB (data-class aware, honours default args). Managed

@@ -365,6 +365,8 @@ Page = { records: [InternalModelEntry], total: int, offset: int, limit: int }
 
 Both methods resolve `CURRENT` via the `VersionStore`/`Data_Store` pointer and read only from it (never `PREVIOUS`/`N_MINUS_2`/`COLD`, Req 16.5), and observe activation atomically — each read is served fully from the old or the new `CURRENT`, never a partial dataset (Req 16.6). The concrete implementation runs against the local PostgreSQL `Data_Store` using the real `CURRENT` pointer.
 
+**API-first realization.** The HTTP surface is documented API-first: **springdoc-openapi** exposes the generated OpenAPI 3 document at `/v3/api-docs` (+ Swagger UI at `/swagger-ui.html`), while the versioned `src/main/resources/openapi.yaml` is the **source of truth**. An `OpenApiContractTest` (integrationTest source set, run under `check`) boots the app and asserts the springdoc-generated document matches the committed `openapi.yaml` (comparing the parsed YAML trees, ignoring the environment-specific `servers` block), failing the build on any drift — the same fitness-function discipline as the ArchUnit architecture test.
+
 ## Data Models
 
 ### InternalModelEntry
