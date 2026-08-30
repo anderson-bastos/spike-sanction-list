@@ -245,7 +245,20 @@ class JdkHttpTransport(
      * recomputed hash (Req 3.3).
      */
     private fun parseDigestHeader(value: String): Sha256Digest? {
-        val raw = value.substringAfter('=', value).trim()
+        // Strip an optional RFC-3230 algorithm token ("sha-256") and any
+        // separator OFAC may (or may not) put between it and the payload. The
+        // live OFAC SLS sends the token glued straight to a hex digest with NO
+        // separator (e.g. "sha-256ec9b2..."), while RFC 3230 uses
+        // "sha-256=<base64>"; accept all of these forms.
+        var raw = value.trim()
+        val lower = raw.lowercase()
+        if (lower.startsWith("sha-256")) {
+            raw = raw.substring("sha-256".length)
+        } else if (lower.startsWith("sha256")) {
+            raw = raw.substring("sha256".length)
+        }
+        // Drop a single leading separator if present ("=", ":", or whitespace).
+        raw = raw.trimStart('=', ':', ' ', '\t')
         // Try hex first (64 hex chars), then base64 of 32 bytes.
         val hex = when {
             raw.length == 64 && raw.all { it.lowercaseChar() in "0123456789abcdef" } -> raw.lowercase()

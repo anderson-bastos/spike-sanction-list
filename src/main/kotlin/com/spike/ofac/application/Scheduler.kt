@@ -161,6 +161,11 @@ class Scheduler(
         val lastIngested = versionStore.lastIngested(config.sourceList)
 
         // --- Stage 1: obtain.checkChange (HEAD) ---
+        // The HEAD carries both the Last-Modified (a fallback Publish_Date input)
+        // and the advertised Digest. OFAC only advertises the Digest on the HEAD —
+        // its GET 302-redirects to S3, which does NOT repeat the header — so the
+        // HEAD digest is the authoritative advertised digest for `validate`.
+        val headDigest: Sha256Digest?
         val headLastModified: Instant? = when (val decision = Obtain.checkChange(adapter, url, lastIngested)) {
             is ChangeDecision.NoChange ->
                 return CycleOutcome.skippedNoChange()
@@ -168,9 +173,13 @@ class Scheduler(
             is ChangeDecision.HeadFailed ->
                 return CycleOutcome.failed(StageName.OBTAIN, decision.cause)
 
-            // Carry the HEAD Last-Modified forward as the fallback Publish_Date input
-            // for when the snapshot body carries no DateOfIssue (see derivePublishDate).
-            is ChangeDecision.Changed -> decision.lastModified
+            // Carry the HEAD Last-Modified + Digest forward: Last-Modified as the
+            // fallback Publish_Date input (see derivePublishDate), Digest as the
+            // advertised digest `validate` checks integrity against (Req 3.2, 3.3).
+            is ChangeDecision.Changed -> {
+                headDigest = decision.advertisedDigest
+                decision.lastModified
+            }
         }
 
         // --- Stage 1b: obtain.download (GET) ---
@@ -187,7 +196,11 @@ class Scheduler(
         val computedDigest = sha256Of(rawBytes)
 
         // --- Stage 2: validate.check (integrity + well-formedness) ---
-        when (val validation = Validate.check(rawBytes, snapshot.advertisedDigest)) {
+        // Prefer the HEAD-advertised digest (OFAC only sends it there); fall back
+        // to any digest the GET response carried (e.g. a source that advertises it
+        // on the GET, as the MockWebServer integration tests do).
+        val advertisedDigest = headDigest ?: snapshot.advertisedDigest
+        when (val validation = Validate.check(rawBytes, advertisedDigest)) {
             is ValidationResult.Rejected ->
                 return CycleOutcome.failed(StageName.VALIDATE, validation.cause.name)
 

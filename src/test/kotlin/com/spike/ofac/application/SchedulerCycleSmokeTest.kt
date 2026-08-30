@@ -216,4 +216,34 @@ class SchedulerCycleSmokeTest {
         outcome.cause shouldBe "DIGEST_MISMATCH"
         store.getPointer(SourceList.SDN, PointerKind.CURRENT) shouldBe null
     }
+
+    // --- regression: digest advertised on HEAD only, absent on GET ------------
+
+    @Test
+    fun `digest advertised on HEAD but absent on GET still validates and activates`(@TempDir folder: Path) {
+        // Regression for the live-OFAC obtain flow: OFAC advertises the Digest on
+        // the HEAD, but its GET 302-redirects to S3 which does NOT repeat the
+        // header, so the download carries no advertised digest. The scheduler must
+        // carry the HEAD digest forward into validate (Req 3.2/3.3); otherwise the
+        // cycle wrongly fails with ABSENT_DIGEST. Here headDigest is set but
+        // getDigest is null, mirroring production.
+        val digest = Sha256Digest.ofHex(sha256Hex(validSnapshot))
+        val store = InMemoryVersionStore()
+
+        val outcome = Scheduler(
+            versionStore = store,
+            rawSnapshotStore = fsStore(folder),
+            sourceLists = emptyList(),
+        ).runCycle(
+            SourceListConfig(
+                SourceList.SDN, url, ScopeConfig.SDN_ONLY,
+                FakeAdapter(headDigest = digest, getBody = validSnapshot, getDigest = null),
+            ),
+        )
+
+        outcome.status shouldBe CycleStatus.ACTIVATED
+        val versionId = outcome.versionId.shouldNotBeNull()
+        versionId.digest shouldBe digest
+        store.getPointer(SourceList.SDN, PointerKind.CURRENT) shouldBe versionId
+    }
 }
