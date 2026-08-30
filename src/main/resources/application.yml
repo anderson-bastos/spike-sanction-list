@@ -28,8 +28,13 @@ ofac:
 # code is disabled — the code adheres to the contract at COMPILE time (QueryController
 # implements the interface generated from this same file). See docs/api-reference.md.
 springdoc:
+  # Keep api-docs ENABLED so springdoc registers the Swagger UI resources and the
+  # /v3/api-docs/swagger-config the UI needs to initialize (disabling it 404s the UI).
+  # The UI is pointed at the curated static contract via swagger-ui.url, so it loads
+  # the source-of-truth openapi.yaml rather than a doc generated from the code.
   api-docs:
-    enabled: false          # do not auto-generate; serve the curated contract instead
+    enabled: true           # keeps Swagger UI resources + /v3/api-docs/swagger-config available
   swagger-ui:
-    url: /openapi.yaml      # Swagger UI loads the static, curated contract
+    enabled: true
+    url: /openapi.yaml      # Swagger UI loads the static, curated contract (source of truth)
     path: /swagger-ui.html

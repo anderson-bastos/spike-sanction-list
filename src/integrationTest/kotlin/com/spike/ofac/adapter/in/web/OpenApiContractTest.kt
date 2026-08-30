@@ -2,10 +2,14 @@ package com.spike.ofac.adapter.`in`.web
 
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldStartWith
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.web.client.TestRestTemplate
+import org.springframework.boot.test.web.server.LocalServerPort
+import org.springframework.http.HttpStatus
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
@@ -18,7 +22,8 @@ import org.yaml.snakeyaml.Yaml
  * API-first **contract test** (spec-first, task 24.6).
  *
  * The curated `src/main/resources/static/openapi.yaml` is the **source of truth**
- * and is what the app serves (springdoc auto-generation is disabled). The primary
+ * and is what the app serves — Swagger UI is pointed at it (`springdoc.swagger-ui.url`).
+ * The primary
  * code↔contract guarantee is now at **compile time**: [QueryController] implements
  * the interface generated from this same file, so the code cannot compile if it
  * drifts from the contract's routes/params/response shapes.
@@ -42,6 +47,12 @@ class OpenApiContractTest {
 
     @Autowired
     private lateinit var handlerMapping: RequestMappingHandlerMapping
+
+    @Autowired
+    private lateinit var rest: TestRestTemplate
+
+    @LocalServerPort
+    private var port: Int = 0
 
     @Test
     fun `the curated openapi_yaml is a well-formed OpenAPI 3 contract`() {
@@ -84,6 +95,28 @@ class OpenApiContractTest {
         contractPaths.forEach { path ->
             (path in servedPatterns) shouldBe true
         }
+    }
+
+    @Test
+    fun `swagger ui is served and loads the curated contract`() {
+        assumeTrue(dockerAvailable, "Docker not available — skipping Swagger UI check.")
+
+        // The UI HTML resolves (springdoc registers /swagger-ui/**).
+        val ui = rest.getForEntity("http://localhost:$port/swagger-ui/index.html", String::class.java)
+        ui.statusCode shouldBe HttpStatus.OK
+
+        // swagger-config must resolve AND point the UI at the curated static contract,
+        // not a code-generated doc — this is what makes the UI show the source of truth.
+        val config = rest.getForObject(
+            "http://localhost:$port/v3/api-docs/swagger-config",
+            String::class.java,
+        )!!
+        config shouldContain "\"url\":\"/openapi.yaml\""
+
+        // And the curated contract is actually served at that URL.
+        val contract = rest.getForEntity("http://localhost:$port/openapi.yaml", String::class.java)
+        contract.statusCode shouldBe HttpStatus.OK
+        contract.body!! shouldContain "operationId: list"
     }
 
     // --- helpers ---
