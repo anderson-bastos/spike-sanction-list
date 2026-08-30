@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: ofac-sanctions-ingestion
+  # Local PostgreSQL Data_Store (processed Internal_Model + version metadata + pointers).
+  # The schema (task 13.1) must create indexes for the Query_API name search:
+  #   - a case-insensitive CONTAINS index over primary_name and alias values
+  #     (e.g. a trigram / GIN index), and
+  #   - an index enabling deterministic FixedRef ordering for pagination.
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ofac
+    username: ofac
+    password: ofac
+
+ofac:
+  # Local Raw_Snapshot_Store: each raw snapshot is written to a file here under a
+  # name derived from (Publish_Date, Digest). Never stored in the Data_Store (Req 15.8).
+  raw-snapshot-store:
+    folder: ./data/raw-snapshot-store
+
+# The Scheduler polls per Source_List on a configurable, bounded, sub-daily
+# interval (Spring @Scheduled; no OS cron). Bound to SchedulerProperties and
+# validated at startup to sit within [1m .. 1d]. Default is 6h (sub-daily).
+  scheduler:
+    interval: 6h

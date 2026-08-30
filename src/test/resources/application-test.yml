@@ -1,0 +1,7 @@
+# Test profile. Points the Raw_Snapshot_Store at a throwaway temp folder so
+# raw-store tests never touch the operational folder (task 1 requirement).
+# Individual tests may override this with a per-test @TempDir when they need
+# isolation between cases.
+ofac:
+  raw-snapshot-store:
+    folder: ${java.io.tmpdir}/ofac-raw-snapshot-store-test

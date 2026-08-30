@@ -6,3 +6,21 @@ ofac-data/*.jsonl
 
 # Mantém o instrumento de benchmark versionado
 !ofac-data/benchmark.py
+
+# --- Gradle / build artifacts ---
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# --- Local Raw_Snapshot_Store operational folder ---
+data/
+
+# --- jqwik failure database ---
+.jqwik-database
+
+# --- IDE ---
+.idea/
+*.iml
+
+# --- Eclipse/VSCode compiled output ---
+bin/
