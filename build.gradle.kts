@@ -18,6 +18,11 @@ plugins {
     // because a load run is slow and needs a running server. See the notes on the
     // `gatlingRun` wiring at the bottom of this file.
     id("io.gatling.gradle") version "3.15.1.3"
+    // API-first spec-first codegen (task 24.6): generate a Kotlin Spring interface
+    // + DTOs from src/main/resources/openapi.yaml (the contract source of truth).
+    // The QueryController implements the generated interface, so the code will not
+    // compile if it drifts from the contract.
+    id("org.openapi.generator") version "7.7.0"
 }
 
 group = "com.spike.ofac"
@@ -121,6 +126,12 @@ dependencies {
     // --- API-first: springdoc exposes OpenAPI 3 (/v3/api-docs) + Swagger UI ---
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:$springdocVersion")
 
+    // openapi-generator (kotlin-spring) generated DTOs/interface use these at compile time:
+    //   - jackson-databind-nullable for JsonNullable fields
+    //   - jakarta.validation for the bean-validation annotations on generated models
+    implementation("org.openapitools:jackson-databind-nullable:0.2.6")
+    implementation("jakarta.validation:jakarta.validation-api")
+
     // --- Jackson Kotlin module: serialize the Internal_Model multi-valued
     //     attributes to JSONB (data-class aware, honours default args). Managed
     //     version comes from the Spring Boot dependency BOM. ---
@@ -177,7 +188,14 @@ tasks.withType<KotlinCompile> {
 // jqwik hooks into the JUnit Platform, so property tests use the same engine.
 // ---------------------------------------------------------------------------
 tasks.named<Test>("test") {
-    useJUnitPlatform()
+    // Unit/example tests run on JUnit Jupiter only. jqwik is on the test classpath
+    // (its arbitraries/assertions are reused), but its ENGINE must not scan this
+    // source set — otherwise it intermittently tries to execute inner helper classes
+    // (e.g. a test's private `FakeAdapter`) as containers, a flaky parallel-run
+    // failure. Property tests run in the dedicated `propertyTest` task/source set.
+    useJUnitPlatform {
+        includeEngines("junit-jupiter")
+    }
 }
 
 val propertyTest = tasks.register<Test>("propertyTest") {
@@ -185,7 +203,11 @@ val propertyTest = tasks.register<Test>("propertyTest") {
     group = "verification"
     testClassesDirs = sourceSets["propertyTest"].output.classesDirs
     classpath = sourceSets["propertyTest"].runtimeClasspath
-    useJUnitPlatform()
+    // Property tests run on the jqwik engine; restrict to it so the Jupiter engine
+    // does not also scan inner helper classes in this set.
+    useJUnitPlatform {
+        includeEngines("jqwik")
+    }
     shouldRunAfter("test")
 }
 
@@ -194,7 +216,11 @@ val integrationTest = tasks.register<Test>("integrationTest") {
     group = "verification"
     testClassesDirs = sourceSets["integrationTest"].output.classesDirs
     classpath = sourceSets["integrationTest"].runtimeClasspath
-    useJUnitPlatform()
+    // Integration tests are JUnit Jupiter only; keep the jqwik engine from scanning
+    // this set's inner helper classes (flaky parallel-run failures otherwise).
+    useJUnitPlatform {
+        includeEngines("junit-jupiter")
+    }
     shouldRunAfter("test")
 }
 
@@ -363,3 +389,78 @@ pitest {
 // No extra configuration block is required: the plugin's defaults (JVM
 // simulations under `src/gatling/kotlin`, reports under `build/reports/gatling`)
 // match the conventions used by the other opt-in guards in this build.
+
+
+// ---------------------------------------------------------------------------
+// API-first spec-first codegen (task 24.6).
+//
+// Generate a Kotlin Spring interface (`QueryApiApi`-style) plus its own DTOs from
+// the versioned contract src/main/resources/openapi.yaml, using the kotlin-spring
+// generator in interfaceOnly mode. QueryController implements the generated
+// interface and maps the domain Page/InternalModelEntry onto the generated DTOs,
+// so openapi.yaml is the COMPILE-TIME authority: the controller will not compile
+// if it drifts from the contract. This complements the runtime OpenApiContractTest.
+//
+// Generated sources land in build/generated/openapi and are added to the main
+// Kotlin source set; compileKotlin depends on the generation task.
+// ---------------------------------------------------------------------------
+val openApiSpec = "$projectDir/src/main/resources/static/openapi.yaml"
+val openApiOut = layout.buildDirectory.dir("generated/openapi")
+
+openApiGenerate {
+    generatorName.set("kotlin-spring")
+    inputSpec.set(openApiSpec)
+    outputDir.set(openApiOut.get().asFile.absolutePath)
+    // Generated contract types live in their own package (no reserved-word
+    // segment, distinct from the application.port.in.QueryApi port).
+    apiPackage.set("com.spike.ofac.adapter.web.generated.api")
+    modelPackage.set("com.spike.ofac.adapter.web.generated.model")
+    configOptions.set(
+        mapOf(
+            "interfaceOnly" to "true",       // generate the interface, not a controller impl
+            "useSpringBoot3" to "true",      // jakarta.* annotations, Spring Boot 3
+            "documentationProvider" to "none",
+            "useTags" to "true",             // group operations by the OpenAPI tag
+            "enumPropertyNaming" to "UPPERCASE",
+            "serializationLibrary" to "jackson",
+            "apiSuffix" to "ContractApi",
+        )
+    )
+    // Only the interface + models; skip build files, tests, and docs.
+    globalProperties.set(mapOf("apis" to "", "models" to "", "supportingFiles" to "false"))
+}
+
+sourceSets {
+    named("main") {
+        java.srcDir(openApiOut.map { it.dir("src/main/kotlin") })
+    }
+}
+
+// Every task that consumes the main Kotlin sources must run after codegen so the
+// generated interface/DTOs are present. compileKotlin obviously; the kapt stub task
+// (present because of the JMH kapt plugin) also scans main sources. Wire both via a
+// name match so configuration order / lazy registration is not a problem.
+// The generated interface/DTOs live in the main source set. Any task that compiles
+// or stubs Kotlin against main (compileKotlin, and the kapt stub tasks the JMH kapt
+// plugin adds for main AND every test source set) must run after codegen. Match by
+// name prefix so lazy/ordered registration is not a problem.
+// The generated interface/DTOs are on the MAIN source set. Every Kotlin compile
+// task (main + all test source sets) and every kapt stub task can see them only
+// after codegen runs, so make them all depend on openApiGenerate. Broad match by
+// name so lazy/parallel task registration/ordering under `clean check` cannot race.
+tasks.matching {
+    it.name.startsWith("compile") && it.name.endsWith("Kotlin") ||
+        it.name.startsWith("kaptGenerateStubs")
+}.configureEach { dependsOn(tasks.named("openApiGenerate")) }
+
+// The JMH `kapt` plugin registers kapt stub/processing tasks for EVERY source set
+// (main + test/propertyTest/integrationTest), even though only `jmh` has an
+// annotation processor. Those extra kapt tasks (a) do nothing useful and (b) can go
+// UP-TO-DATE against a stale cache after `clean`, causing a non-deterministic
+// clean-build failure when the matching compile task uses stale stubs. Disable every
+// kapt task that is NOT for the `jmh` source set; kapt then runs only where it is
+// actually needed (kaptJmhKotlin / kaptGenerateStubsJmhKotlin).
+tasks.matching {
+    (it.name.startsWith("kapt") ) &&
+        !it.name.contains("Jmh")
+}.configureEach { enabled = false }

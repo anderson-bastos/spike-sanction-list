@@ -1,122 +1,67 @@
 package com.spike.ofac.adapter.`in`.web
 
+import com.spike.ofac.adapter.web.generated.api.QueryContractApi
+import com.spike.ofac.adapter.web.generated.model.Page as PageDto
 import com.spike.ofac.application.port.`in`.EmptyQueryException
 import com.spike.ofac.application.port.`in`.InvalidPaginationException
-import com.spike.ofac.application.port.`in`.Page
 import com.spike.ofac.application.port.`in`.QueryApi
 import com.spike.ofac.domain.model.SourceList
-import io.swagger.v3.oas.annotations.Operation
-import io.swagger.v3.oas.annotations.Parameter
-import io.swagger.v3.oas.annotations.media.Content
-import io.swagger.v3.oas.annotations.media.Schema
-import io.swagger.v3.oas.annotations.responses.ApiResponse
-import io.swagger.v3.oas.annotations.responses.ApiResponses
-import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
-import org.springframework.web.bind.annotation.GetMapping
-import org.springframework.web.bind.annotation.PathVariable
-import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
 
 /**
- * Read-only HTTP surface over the [QueryApi] (task 17.1, Spring Web).
+ * Read-only HTTP surface over the [QueryApi] port (task 17.1) — now realized
+ * **spec-first** (task 24.6): it **implements the interface generated from
+ * `openapi.yaml`** ([QueryContractApi]) and returns the contract's generated
+ * DTOs, mapping them from the domain via [QueryDtoMapper].
  *
- * Two endpoints, both serving **only** the `CURRENT` version of the addressed
- * [SourceList] (Req 16.5):
+ * Because the routes, parameters, and response shapes come from the generated
+ * interface + DTOs, `openapi.yaml` is the **compile-time authority**: if the code
+ * drifts from the contract this class no longer compiles. That complements the
+ * runtime `OpenApiContractTest`, which compares the springdoc-served document to
+ * the committed contract.
  *
- *  - `GET /api/{sourceList}/records` — paginated list (Req 16.1, 16.2).
- *  - `GET /api/{sourceList}/records/search?q=...` — case-insensitive contains
- *    name search over primary name + aliases (Req 16.3).
+ * Behavior is unchanged from the original controller (Req 16):
+ *  - `GET /api/{sourceList}/records` — paginated list over `CURRENT` (Req 16.1, 16.2).
+ *  - `GET /api/{sourceList}/records/search?q=` — case-insensitive contains name
+ *    search over primary name + aliases, over `CURRENT` (Req 16.3).
+ *  - Empty/no-CURRENT → `200` empty page, `total` 0 (Req 16.4); missing/blank `q`
+ *    (Req 16.7), out-of-bounds pagination (Req 16.8), and an unknown `{sourceList}`
+ *    are `400` client errors. The API only reads — it never mutates (Req 16.9).
  *
- * Both accept `offset` (default 0) and `limit` (default 50, max 1000) query
- * params and return a [Page] as JSON with pagination metadata (Req 16.1). A page
- * that matches nothing — including a list with no `CURRENT` yet — is a `200 OK`
- * with an empty page and `total` 0, not an error (Req 16.4).
- *
- * Client errors are mapped to `400 Bad Request`: a missing/blank `q` (Req 16.7),
- * out-of-bounds pagination (Req 16.8), a non-numeric `offset`/`limit` (Spring type
- * conversion, Req 16.8), and an unknown `{sourceList}` path segment.
- *
- * The controller only ever calls the read-only [QueryApi]; it never writes, so it
- * cannot modify any `Version`, pointer, or record (Req 16.9).
- *
- * The springdoc annotations here feed the generated OpenAPI document; the
- * versioned `openapi.yaml` is the source of truth and a contract test guards drift.
+ * The generated interface types `sourceList` as a `String`, so this controller
+ * parses it into the [SourceList] enum and maps an unknown value to the same
+ * client-error path (Req 16.8).
  */
 @RestController
-@RequestMapping("/api/{sourceList}/records")
-@Tag(name = "Query", description = "Read-only queries over the CURRENT version of a Source_List")
 class QueryController(
     private val queryApi: QueryApi,
-) {
+) : QueryContractApi {
 
-    /** Paginated list over the CURRENT version of [sourceList] (Req 16.1, 16.2, 16.4). */
-    @GetMapping
-    @Operation(
-        summary = "List In_Scope_Records from CURRENT (paginated)",
-        description = "Returns In_Scope_Records from the CURRENT version of the given Source_List, " +
-            "ordered deterministically by fixedRef, with offset/limit pagination. " +
-            "No CURRENT yet or a page past the end returns an empty page with total 0.",
-    )
-    @ApiResponses(
-        ApiResponse(
-            responseCode = "200",
-            description = "A page of records (possibly empty with total 0)",
-            content = [Content(schema = Schema(implementation = Page::class))],
-        ),
-        ApiResponse(
-            responseCode = "400",
-            description = "Invalid pagination or unknown sourceList",
-            content = [Content(schema = Schema(implementation = ApiError::class))],
-        ),
-    )
-    fun list(
-        @Parameter(description = "Source list to read CURRENT from", example = "SDN")
-        @PathVariable sourceList: SourceList,
-        @Parameter(description = "Zero-based row offset (>= 0)", example = "0")
-        @RequestParam(defaultValue = "0") offset: Int,
-        @Parameter(description = "Page size (1..1000)", example = "50")
-        @RequestParam(defaultValue = "50") limit: Int,
-    ): Page = queryApi.list(sourceList, offset, limit)
-
-    /** Case-insensitive contains name search over the CURRENT version (Req 16.3, 16.7). */
-    @GetMapping("/search")
-    @Operation(
-        summary = "Search CURRENT by name (case-insensitive contains over primary name + aliases)",
-        description = "Returns In_Scope_Records from CURRENT whose primary name OR any alias contains " +
-            "the query string, case-insensitively. Same pagination, bounds, ordering, and metadata as list.",
-    )
-    @ApiResponses(
-        ApiResponse(
-            responseCode = "200",
-            description = "A page of matching records (possibly empty with total 0)",
-            content = [Content(schema = Schema(implementation = Page::class))],
-        ),
-        ApiResponse(
-            responseCode = "400",
-            description = "Missing/blank q, invalid pagination, or unknown sourceList",
-            content = [Content(schema = Schema(implementation = ApiError::class))],
-        ),
-    )
-    fun search(
-        @Parameter(description = "Source list to read CURRENT from", example = "SDN")
-        @PathVariable sourceList: SourceList,
-        @Parameter(description = "Non-empty search term (matched as a case-insensitive substring)", example = "ivan")
-        @RequestParam(name = "q", required = false) q: String?,
-        @Parameter(description = "Zero-based row offset (>= 0)", example = "0")
-        @RequestParam(defaultValue = "0") offset: Int,
-        @Parameter(description = "Page size (1..1000)", example = "50")
-        @RequestParam(defaultValue = "50") limit: Int,
-    ): Page {
-        // A missing `q` param is a client error (Req 16.7); blank `q` is rejected by
-        // the QueryApi itself (also Req 16.7).
-        if (q == null) throw EmptyQueryException("search query parameter 'q' is required")
-        return queryApi.searchByName(q, sourceList, offset, limit)
+    override fun list(sourceList: String, offset: Int, limit: Int): ResponseEntity<PageDto> {
+        val page = queryApi.list(parseSourceList(sourceList), offset, limit)
+        return ResponseEntity.ok(QueryDtoMapper.toDto(page))
     }
+
+    override fun search(sourceList: String, q: String?, offset: Int, limit: Int): ResponseEntity<PageDto> {
+        // A missing `q` is a client error (Req 16.7); a blank `q` is rejected by the
+        // QueryApi port itself (also Req 16.7).
+        if (q == null) throw EmptyQueryException("search query parameter 'q' is required")
+        val page = queryApi.searchByName(q, parseSourceList(sourceList), offset, limit)
+        return ResponseEntity.ok(QueryDtoMapper.toDto(page))
+    }
+
+    /**
+     * Parses the contract's `String` path segment into the [SourceList] enum;
+     * an unknown value is a client error (`400`), consistent with the previous
+     * enum-typed binding.
+     */
+    private fun parseSourceList(raw: String): SourceList =
+        runCatching { SourceList.valueOf(raw) }
+            .getOrElse { throw UnknownSourceListException(raw) }
 
     // --- client-error mapping (Req 16.7, 16.8) ---
 
@@ -130,10 +75,12 @@ class QueryController(
     fun onInvalidPagination(e: InvalidPaginationException): ResponseEntity<ApiError> =
         badRequest(e.message ?: "invalid pagination parameters")
 
-    /**
-     * Non-numeric `offset`/`limit` or an unknown `{sourceList}` value fail Spring's
-     * type conversion -> 400 (Req 16.8, and unknown source list as a client error).
-     */
+    /** Unknown `{sourceList}` -> 400. */
+    @ExceptionHandler(UnknownSourceListException::class)
+    fun onUnknownSourceList(e: UnknownSourceListException): ResponseEntity<ApiError> =
+        badRequest(e.message ?: "unknown source list")
+
+    /** Non-numeric `offset`/`limit` fail Spring's type conversion -> 400 (Req 16.8). */
     @ExceptionHandler(MethodArgumentTypeMismatchException::class)
     fun onTypeMismatch(e: MethodArgumentTypeMismatchException): ResponseEntity<ApiError> =
         badRequest("invalid value for parameter '${e.name}': ${e.value}")
@@ -141,10 +88,10 @@ class QueryController(
     private fun badRequest(message: String): ResponseEntity<ApiError> =
         ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiError(message))
 
-    /** Minimal client-error body returned with a `400`. */
-    @Schema(description = "Client-error body")
-    data class ApiError(
-        @get:Schema(description = "Human-readable error message", example = "limit must be <= 1000, was 5000")
-        val error: String,
-    )
+    /** Minimal client-error body returned with a `400` (matches the contract's ApiError schema). */
+    data class ApiError(val error: String)
 }
+
+/** Raised when the `{sourceList}` path segment is not a known [SourceList] (client error). */
+class UnknownSourceListException(raw: String) :
+    IllegalArgumentException("unknown sourceList '$raw' (expected SDN or CONSOLIDATED)")

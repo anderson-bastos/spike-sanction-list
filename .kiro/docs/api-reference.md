@@ -144,21 +144,24 @@ curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:8080/api/SDN/records/
 
 ---
 
-## API-first: OpenAPI (IMPLEMENTADO)
+## API-first: OpenAPI spec-first (IMPLEMENTADO)
 
-A API adota **spec-first (API-first)** com contrato versionado como fonte de verdade e verificação automática contra o código:
+A API adota **spec-first**: o contrato **gera** o código, e o código só compila enquanto adere ao contrato.
 
-- **Fonte de verdade:** `src/main/resources/openapi.yaml` (OpenAPI 3) versionado no repositório. É a autoridade do contrato.
-- **springdoc em runtime:** a app expõe o contrato gerado a partir do código anotado (`QueryController` + o bean `OpenApiConfiguration`) em:
-  - `GET /v3/api-docs` (JSON) e `GET /v3/api-docs.yaml` (YAML)
-  - **Swagger UI** em `GET /swagger-ui.html` — para explorar e testar a API viva.
-- **Teste de contrato (guarda no `check`):** `OpenApiContractTest` (source set `integrationTest`) sobe a app, busca `/v3/api-docs.yaml`, parseia tanto o gerado quanto o `openapi.yaml` versionado como árvore YAML (ignorando o bloco `servers`, específico de ambiente) e **compara semanticamente**. Se o código divergir do contrato (endpoint/param novo ou renomeado, schema alterado), o **build falha** — a mesma disciplina de fitness function do teste de arquitetura ArchUnit.
+- **Fonte de verdade:** `src/main/resources/static/openapi.yaml` (OpenAPI 3), versionado e **curado à mão**. É a autoridade do contrato — não é mais um dump gerado pelo springdoc.
+- **Geração de código (compile-time):** o **openapi-generator** (Gradle plugin, generator `kotlin-spring`, `interfaceOnly=true`, `useSpringBoot3=true`) gera, a partir do `openapi.yaml`, uma **interface Kotlin** (`QueryContractApi`) e os **DTOs** do contrato (em `com.spike.ofac.adapter.web.generated.*`). O `QueryController` **implementa essa interface** e mapeia o domínio (`Page`/`InternalModelEntry`) para os DTOs gerados via `QueryDtoMapper`. Se o contrato mudar (rota/param/shape), a interface muda e **o controller não compila** até se adequar — o `openapi.yaml` é a autoridade em tempo de compilação.
+- **Contrato servido:** a app serve o próprio `openapi.yaml` curado (springdoc com `api-docs.enabled=false`, `swagger-ui.url=/openapi.yaml`), então o que se publica é exatamente o arquivo versionado, em `GET /openapi.yaml`.
+- **Testes de contrato (guardas no `check`):**
+  - `OpenApiContractTest` (integrationTest): valida que o `openapi.yaml` é um OpenAPI 3 bem-formado (versão, paths, operationIds `list`/`search`) e que **toda rota declarada no contrato existe** entre os handlers registrados da app.
+  - `QueryControllerHttpIntegrationTest` (integrationTest): sobe a app + PostgreSQL (Testcontainers), insere uma versão CURRENT real e exercita os endpoints **HTTP de verdade**, exigindo `200 application/json` com o shape dos DTOs gerados (mais os 400 de erro). É o teste que fecha a lacuna de serialização.
 
-**Fluxo ao evoluir a API:** altere as anotações no código, rode a app e capture o doc gerado (`curl -s localhost:8080/v3/api-docs.yaml`), atualize o `openapi.yaml` versionado (removendo o bloco `servers`), e confirme que o `OpenApiContractTest` passa. O `.yaml` é o que se publica para consumidores.
+**Nota de content-type:** o contrato declara `application/json` nas respostas (corrigido de um `*/*` que vinha do dump inicial do springdoc e causava falha de serialização do DTO). Ao editar o `openapi.yaml`, mantenha `application/json`.
 
-> Explorar o contrato localmente: suba a app (ver `operations.md`) e acesse `http://localhost:8080/swagger-ui.html`.
+**Fluxo ao evoluir a API (spec-first):** edite o `openapi.yaml` curado → rode o build (o generator regenera a interface/DTOs; o controller precisa se adequar para compilar) → ajuste o `QueryController`/`QueryDtoMapper` → os testes de contrato validam. O `.yaml` é o que se publica.
 
-**Possível evolução futura (não implementada):** geração de **clientes**/DTOs a partir do `openapi.yaml` via `openapi-generator`, e restrição do Swagger UI a um profile (ex.: só `dev`) por postura de exposição. Hoje o Swagger UI fica habilitado por padrão.
+> **Swagger UI:** com a autogeração do springdoc desligada (`api-docs.enabled=false`), a Swagger UI embutida pode não renderizar (limitação conhecida do springdoc, que acopla a UI ao endpoint de api-docs). O contrato canônico está sempre disponível como arquivo em `GET /openapi.yaml` e pode ser aberto em qualquer visualizador OpenAPI (editor.swagger.io, Redoc, etc.). Reabilitar a UI embutida — apontando-a para o arquivo estático — é um ajuste futuro de conveniência.
+
+**Possível evolução futura (não implementada):** geração de **clientes** a partir do `openapi.yaml` via `openapi-generator`, e restrição/reativação da Swagger UI conforme a postura de exposição.
 
 ## Estabilidade e versionamento da API
 

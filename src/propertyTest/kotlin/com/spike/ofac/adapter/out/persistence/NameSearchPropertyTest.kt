@@ -209,8 +209,12 @@ class NameSearchPropertyTest {
      */
     private fun queryFor(current: List<InternalModelEntry>): Arbitrary<String> {
         val names = current.flatMap { listOf(it.primaryName) + it.aliases.map { a -> a.name } }
+        // NAME_CHARS contains ' ' and '-', so a short random string can be blank
+        // (all-whitespace). The main property never uses a blank query — that case
+        // is covered separately by blankQueryIsRejected — so filter blanks out here.
         val randomQuery: Arbitrary<String> =
             Arbitraries.strings().withChars(*NAME_CHARS).ofMinLength(1).ofMaxLength(5)
+                .filter { it.isNotBlank() }
 
         if (names.isEmpty()) return randomQuery
 
@@ -226,7 +230,7 @@ class NameSearchPropertyTest {
         return Arbitraries.frequencyOf(
             Tuple.of(3, substringQuery),
             Tuple.of(1, randomQuery),
-        )
+        ).filter { it.isNotBlank() }
     }
 
     /** Picks a non-empty contiguous substring of [s]. */

@@ -38,7 +38,7 @@ Definidos em `src/main/resources/application.yml` e sobrescrevíveis por proprie
 
 ## Explorar a API (OpenAPI / Swagger)
 
-Com a app no ar: contrato OpenAPI em `http://localhost:8080/v3/api-docs.yaml` e Swagger UI em `http://localhost:8080/swagger-ui.html`. A fonte de verdade do contrato é `src/main/resources/openapi.yaml` (o `OpenApiContractTest` falha o build se o código divergir dela).
+Com a app no ar, o contrato curado é servido em `http://localhost:8080/openapi.yaml` (fonte de verdade: `src/main/resources/static/openapi.yaml`). Abra-o em qualquer visualizador OpenAPI (editor.swagger.io, Redoc). A Swagger UI embutida pode não renderizar com a autogeração do springdoc desligada (`api-docs.enabled=false`) — o arquivo `/openapi.yaml` é o canal canônico. O contrato **gera** a interface implementada pelo `QueryController` (spec-first), então o código só compila enquanto adere ao contrato.
 
 ## Particularidade real da OFAC (obtain)
 

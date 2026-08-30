@@ -374,6 +374,34 @@ Tasks that depend on these decisions are marked and implemented against configur
     - The goal is validating that the 20 property tests + example tests actually catch injected defects.
     - _Requirements: test-effectiveness gate over the pure-logic packages — non-functional, no new requirement reference._
 
+- [x] 24. Post-MVP: Hexagonal architecture and API-first
+  - Post-MVP hardening and architecture work layered onto the functional pipeline (tasks 1–20). This is **not** part of the original 20-property functional scope — it is behavior-preserving refactoring, real-OFAC hardening, production wiring, and the API contract discipline. Sub-tasks marked `[x]` are done; `24.6` is in progress.
+  - [x] 24.1 Refactor to Hexagonal (Ports & Adapters) packages
+    - Reorganize production code into three inward-pointing layers (`adapter → application → domain`); behavior-preserving, no functional change. Layer mapping: `domain.{model, transform, version, scope}` (pure core, framework-free); `application` (Scheduler + obtain/persist/publish/retention orchestration) with ports `application.port.in` (`QueryApi`, `Page`) and `application.port.out` (`VersionStore`, `RawSnapshotStore`, `SourceAdapter`); `adapter.{in.web, in.scheduling, out.persistence, out.source, config}` (concrete IO + Spring wiring).
+    - _Requirements: architecture/maintainability — post-MVP, no new functional requirement reference (see design "Architecture layering (Hexagonal / Ports & Adapters)")._
+  - [x] 24.2 Add the ArchUnit dependency-rule fitness test
+    - Add `HexagonalArchitectureTest` (in the `test` source set, run under `check`) enforcing the dependency rule: layers depend inward only, the domain does not depend on application/adapter, the application does not depend on adapter, and the domain stays free of Spring/JDBC/Jackson/HTTP.
+    - _Requirements: architecture fitness function — post-MVP, no new functional requirement reference._
+  - [x] 24.3 Fix real-OFAC digest handling (header form + HEAD-carried digest)
+    - Parse OFAC's glued `sha-256<hex>` `Digest` header form (algorithm token glued directly to a lowercase hex digest, no `=`, hex not base64), alongside the RFC-3230 base64 and plain-hex forms already accepted.
+    - Carry the HEAD-advertised digest forward into `validate`, because the OFAC GET **302-redirects to S3** and the final response does **not** repeat the `Digest` header (chunked, no `Content-Length`); relying on the GET digest alone rejected every real snapshot as `ABSENT_DIGEST`.
+    - Regression tests added (`JdkHttpTransportDigestHeaderTest`; a `SchedulerCycleSmokeTest` case).
+    - _Requirements: refines the realization of Property 2 / Req 3 without changing the requirement — post-MVP real-OFAC hardening (see design "obtain" and "SourceAdapter")._
+  - [x] 24.4 Wire the SDN Source_List for a real import + bootstrap runner
+    - Add `OfacSourceListWiring` (`adapter.in.scheduling`): a `SourceListConfig` bean for **SDN** with the live SLS `SDN_ADVANCED.XML` URL (`ofac.source.sdn.url`, gated by `ofac.source.sdn.enabled`, default `true`), `ScopeConfig.SDN_ONLY`, and the credential-free `OfacAdapter`.
+    - Add `BootstrapImportRunner` (`adapter.in.scheduling`): an `ApplicationRunner` behind the Spring profile `bootstrap` that fires one `scheduler.tick()` at startup for an on-demand import.
+    - First live import verified end-to-end: SDN `publish_date` 2026-08-28 **ACTIVATED**, **17,439 records** (9,922 Entity + 7,517 Individual), counts reconciled, `integrity_ok = true`, raw snapshot stored, `CURRENT` resolved.
+    - _Requirements: production wiring / deployment — post-MVP, no new functional requirement reference (see design "Deployment & bootstrap")._
+  - [x] 24.5 API-first (OpenAPI) documentation + contract-drift guard
+    - Expose the OpenAPI 3 document via **springdoc-openapi** (`/v3/api-docs`, Swagger UI at `/swagger-ui.html`), with the versioned `src/main/resources/openapi.yaml` as the source of truth.
+    - Add `OpenApiContractTest` (integrationTest source set, run under `check`) comparing the springdoc-generated document to the committed `openapi.yaml` (parsed-YAML compare, ignoring the environment-specific `servers` block) and failing the build on drift.
+    - _Requirements: API contract discipline over the read-only Query_API (Req 16) — post-MVP fitness function, no new functional requirement._
+  - [x] 24.6 Spec-first codegen: generate the Query API interface + DTOs from the contract
+    - Generate a Kotlin Spring interface plus its DTOs from `openapi.yaml` via the **openapi-generator** Gradle plugin (`kotlin-spring` generator, `interfaceOnly=true`, `useSpringBoot3=true`).
+    - Make `QueryController` **implement** the generated interface, mapping the domain `Page`/`InternalModelEntry` onto the generated DTOs.
+    - Add contract test(s) covering the generated-interface implementation. This makes `openapi.yaml` the **compile-time** authority (the controller will not compile if it drifts from the contract), complementing the runtime `OpenApiContractTest` (24.5).
+    - _Requirements: API contract discipline over the read-only Query_API (Req 16) — post-MVP, no new functional requirement (see design "Toward spec-first")._
+
 ## Notes
 
 - **Stack:** Kotlin on Spring Boot, Gradle (Kotlin DSL); jqwik for property-based tests (stateful mode for the pointer properties), JUnit 5 + kotest assertions for example/unit tests, MockK as the mocking library for unit tests, Testcontainers (PostgreSQL) for DB integration, MockWebServer/WireMock for HTTP obtain tests, StAX for XML parsing, Spring Web for the `Query_API`, and Spring `@Scheduled` for the `Scheduler` (see "Implementation Language"). The stack can be swapped if a different language is chosen; the task/property/requirement mapping is language-independent.

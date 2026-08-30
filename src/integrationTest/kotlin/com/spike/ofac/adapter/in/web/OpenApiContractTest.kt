@@ -1,73 +1,100 @@
 package com.spike.ofac.adapter.`in`.web
 
+import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldStartWith
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.boot.test.web.client.TestRestTemplate
-import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.PostgreSQLContainer
 import org.yaml.snakeyaml.Yaml
 
 /**
- * API-first **contract test**: the versioned `src/main/resources/openapi.yaml` is
- * the **source of truth**, and this test asserts the OpenAPI document springdoc
- * generates from the live, annotated code still matches it. If the code drifts
- * from the published contract (a new/renamed endpoint or param, a changed schema),
- * `check` fails here — the same fitness-function discipline as the ArchUnit test.
+ * API-first **contract test** (spec-first, task 24.6).
  *
- * The comparison is **semantic**, not string-equality: both documents are parsed
- * to YAML trees and the environment-specific `servers` block is stripped from the
- * generated one (the committed contract has none), so formatting/host differences
- * never cause false failures — only real structural drift does.
+ * The curated `src/main/resources/static/openapi.yaml` is the **source of truth**
+ * and is what the app serves (springdoc auto-generation is disabled). The primary
+ * code↔contract guarantee is now at **compile time**: [QueryController] implements
+ * the interface generated from this same file, so the code cannot compile if it
+ * drifts from the contract's routes/params/response shapes.
  *
- * Boots the full Spring context on a random port (springdoc must be active to
- * generate the doc), backed by a Testcontainers PostgreSQL so the persistence
- * beans wire. Docker-guarded: skips cleanly where Docker is unavailable, matching
- * the other integration tests.
+ * This runtime test adds two independent checks the compiler cannot give:
+ *
+ *  1. **The contract is a well-formed OpenAPI 3 document** — it parses, declares an
+ *     `openapi: 3.x` version, and has the two expected operations
+ *     (`list`, `search`) under the expected paths.
+ *  2. **Every path declared in the contract is actually served** by the running
+ *     app — each contract path is present among Spring's registered
+ *     `RequestMappingHandlerMapping` patterns. This catches a contract that
+ *     declares an endpoint the app does not expose (or vice versa) even though both
+ *     independently compile.
+ *
+ * Boots the full context (Testcontainers PostgreSQL so the persistence beans wire);
+ * Docker-guarded so it skips cleanly where Docker is unavailable.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class OpenApiContractTest {
 
-    @LocalServerPort
-    private var port: Int = 0
-
     @Autowired
-    private lateinit var rest: TestRestTemplate
+    private lateinit var handlerMapping: RequestMappingHandlerMapping
 
     @Test
-    fun `generated OpenAPI document matches the versioned openapi_yaml source of truth`() {
-        assumeTrue(dockerAvailable, "Docker not available — skipping OpenAPI contract test.")
+    fun `the curated openapi_yaml is a well-formed OpenAPI 3 contract`() {
+        val contract = loadContract()
 
-        val generatedYaml = rest.getForObject(
-            "http://localhost:$port/v3/api-docs.yaml",
-            String::class.java,
-        )!!
+        (contract["openapi"] as String).shouldStartWith("3.")
 
-        val committedYaml = javaClass.classLoader
-            .getResourceAsStream("openapi.yaml")!!
-            .bufferedReader(Charsets.UTF_8)
-            .use { it.readText() }
+        @Suppress("UNCHECKED_CAST")
+        val paths = contract["paths"] as Map<String, Map<String, Map<String, Any?>>>
+        paths.keys shouldContainAll listOf(
+            "/api/{sourceList}/records",
+            "/api/{sourceList}/records/search",
+        )
 
-        val yaml = Yaml()
-        val generated = normalize(yaml.load<Map<String, Any?>>(generatedYaml))
-        val committed = normalize(yaml.load<Map<String, Any?>>(committedYaml))
-
-        // Semantic equality of the OpenAPI trees (servers stripped from both).
-        generated shouldBe committed
+        // operationIds the generated interface + controller bind to.
+        val operationIds = paths.values.flatMap { it.values }.mapNotNull { it["operationId"] as String? }
+        operationIds shouldContainAll listOf("list", "search")
     }
 
-    /**
-     * Drops the environment-specific `servers` block so the committed contract
-     * (which has none) and the generated doc (which springdoc fills with the live
-     * host/port) compare equal on everything that actually defines the contract.
-     */
-    private fun normalize(doc: Map<String, Any?>): Map<String, Any?> =
-        doc.filterKeys { it != "servers" }
+    @Test
+    fun `every path declared in the contract is served by the running app`() {
+        assumeTrue(dockerAvailable, "Docker not available — skipping app-route contract check.")
+
+        val contract = loadContract()
+
+        @Suppress("UNCHECKED_CAST")
+        val contractPaths = (contract["paths"] as Map<String, Any?>).keys
+
+        // All URL patterns Spring actually registered for the app's handlers.
+        val servedPatterns: Set<String> = handlerMapping.handlerMethods.keys
+            .flatMap { info ->
+                info.pathPatternsCondition?.patternValues
+                    ?: info.patternsCondition?.patterns
+                    ?: emptySet()
+            }
+            .toSet()
+
+        // Each contract path must be exposed by the app (compile-time already ties
+        // the controller to the generated interface; this guards the served routes).
+        contractPaths.forEach { path ->
+            (path in servedPatterns) shouldBe true
+        }
+    }
+
+    // --- helpers ---
+
+    private fun loadContract(): Map<String, Any?> {
+        val text = javaClass.classLoader
+            .getResourceAsStream("static/openapi.yaml")!!
+            .bufferedReader(Charsets.UTF_8)
+            .use { it.readText() }
+        return Yaml().load(text)
+    }
 
     companion object {
         private val dockerAvailable: Boolean =
@@ -79,14 +106,11 @@ class OpenApiContractTest {
         @JvmStatic
         @DynamicPropertySource
         fun datasourceProps(registry: DynamicPropertyRegistry) {
-            // Only wire the datasource when a container is up; when Docker is absent
-            // the single test method assumeTrue-skips before using the context.
             postgres?.let { pg ->
                 registry.add("spring.datasource.url") { pg.jdbcUrl }
                 registry.add("spring.datasource.username") { pg.username }
                 registry.add("spring.datasource.password") { pg.password }
             }
-            // Keep the scheduled import from firing during the test.
             registry.add("ofac.source.sdn.enabled") { "false" }
         }
     }

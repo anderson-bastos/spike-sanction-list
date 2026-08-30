@@ -22,3 +22,14 @@ ofac:
 # validated at startup to sit within [1m .. 1d]. Default is 6h (sub-daily).
   scheduler:
     interval: 6h
+
+# API-first (spec-first): the curated src/main/resources/static/openapi.yaml is the
+# source of truth and is what Swagger UI serves. springdoc's own generation from the
+# code is disabled — the code adheres to the contract at COMPILE time (QueryController
+# implements the interface generated from this same file). See docs/api-reference.md.
+springdoc:
+  api-docs:
+    enabled: false          # do not auto-generate; serve the curated contract instead
+  swagger-ui:
+    url: /openapi.yaml      # Swagger UI loads the static, curated contract
+    path: /swagger-ui.html

@@ -55,13 +55,13 @@ paths:
         "400":
           description: Invalid pagination or unknown sourceList
           content:
-            '*/*':
+            application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
         "200":
           description: A page of records (possibly empty with total 0)
           content:
-            '*/*':
+            application/json:
               schema:
                 $ref: "#/components/schemas/Page"
   /api/{sourceList}/records/search:
@@ -114,13 +114,13 @@ paths:
         "200":
           description: A page of matching records (possibly empty with total 0)
           content:
-            '*/*':
+            application/json:
               schema:
                 $ref: "#/components/schemas/Page"
         "400":
           description: "Missing/blank q, invalid pagination, or unknown sourceList"
           content:
-            '*/*':
+            application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
 components:
