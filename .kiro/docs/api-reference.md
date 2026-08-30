@@ -1,0 +1,161 @@
+# API de Consulta — Referência (analista + desenvolvedor)
+
+Propósito: descrever como **consultar um sancionado** na API real que roda hoje, e registrar a postura de **API-first** (atual e recomendada). Esta referência descreve o que já está implementado no `QueryController`/`PgQueryApi` — nada aqui é aspiracional.
+
+> Escopo: a Query API é **somente leitura** e serve **exclusivamente a versão `CURRENT`** de cada `Source_List` (nunca `PREVIOUS`, `N_MINUS_2` ou `COLD`). Ela nunca altera versão, ponteiro ou registro.
+
+---
+
+## Visão para o analista (o essencial)
+
+- **O que dá para perguntar:** "quais sancionados estão na lista SDN agora?" (listagem paginada) e "existe alguém cujo nome ou apelido contém _X_?" (busca por nome).
+- **Sempre sobre a foto vigente:** toda resposta vem da versão `CURRENT` — a última importação ativada. Consultas históricas (versões anteriores) e "quem entrou/saiu" **não** são atendidas por esta API hoje (ver `versioning-and-diff.md`).
+- **Busca por nome** é _contains_ (contém), **sem diferenciar maiúsculas/minúsculas**, e cobre o **nome principal e todos os apelidos (aliases)**. Ex.: `q=ivan` acha "Ivanov" e um alias "Big Ivan".
+- **Escopo dos dados:** apenas pessoas (`Individual`) e entidades (`Entity`). Embarcações (vessels) e aeronaves (aircraft) ficam fora por definição.
+
+---
+
+## Endpoints
+
+Base: `http://<host>:8080` (porta padrão do Spring Boot).
+
+O segmento `{sourceList}` aceita os valores do enum `SourceList`: **`SDN`** ou **`CONSOLIDATED`** (case-sensitive; um valor desconhecido é erro de cliente `400`).
+
+### 1) Listagem paginada
+
+```
+GET /api/{sourceList}/records?offset={offset}&limit={limit}
+```
+
+| Parâmetro | Tipo | Padrão | Regras |
+| --------- | ---- | ------ | ------ |
+| `sourceList` (path) | enum | — | `SDN` \| `CONSOLIDATED` |
+| `offset` (query) | int | `0` | `>= 0` |
+| `limit` (query) | int | `50` | `> 0` e `<= 1000` |
+
+Ordenação **determinística e estável por `fixed_ref`** — a mesma página, pedida de novo com o mesmo `offset`/`limit`, retorna os mesmos registros na mesma ordem.
+
+### 2) Busca por nome
+
+```
+GET /api/{sourceList}/records/search?q={termo}&offset={offset}&limit={limit}
+```
+
+| Parâmetro | Tipo | Padrão | Regras |
+| --------- | ---- | ------ | ------ |
+| `q` (query) | string | — | **obrigatório e não vazio** |
+| `offset` (query) | int | `0` | `>= 0` |
+| `limit` (query) | int | `50` | `> 0` e `<= 1000` |
+
+Casa `q` (case-insensitive, _contains_) contra **`primary_name` OU qualquer alias**. Metacaracteres de `LIKE` (`%`, `_`) são escapados, então `q=50%` casa o literal "50%". Mesma paginação, limites, ordenação e metadados da listagem.
+
+---
+
+## Formato da resposta — `Page`
+
+`200 OK` com corpo JSON:
+
+```json
+{
+  "records": [ /* InternalModelEntry[] — a fatia desta página, ordenada por fixed_ref */ ],
+  "total":  17439,   // total de registros que casam no CURRENT (não só nesta página)
+  "offset": 0,
+  "limit":  50
+}
+```
+
+- `total` é a contagem completa dos registros que casam na versão `CURRENT` — o cliente calcula quantas páginas existem.
+- Quando **nada casa**, ou a lista **ainda não tem `CURRENT`**, a resposta é `200 OK` com `records: []` e `total: 0` — **não** é erro.
+
+### `InternalModelEntry` (registro de um sancionado)
+
+```json
+{
+  "fixedRef": "12345",
+  "entityType": "Individual",           // "Individual" | "Entity" (apenas in-scope)
+  "primaryName": "Ivan Ivanov",
+  "aliases": [ { "name": "Big Ivan", "type": "aka", "isPrimary": false } ],
+  "addresses": [ { "raw": "Skořepka 1058/8 Staré Město", "country": "CZ", "parts": {} } ],
+  "documents": [ { "type": "Passport", "number": "X12345", "issuer": "RU" } ],
+  "nationalities": ["RU"],
+  "citizenships": ["RU"],
+  "birthDates": [ { "year": 1970, "month": null, "day": null, "period": null } ],
+  "sanctionPrograms": ["SDGT"],         // 1..N — sempre ao menos um
+  "remarks": ["..."],
+  "relationships": [ { "toFixedRef": "67890", "relationType": "linked-to" } ],
+  "versionId": { "publishDate": "2026-08-28", "digest": "ec9b2e0c…<64 hex>" }
+}
+```
+
+O campo `versionId` diz de **qual versão** o registro veio (a `CURRENT` no momento da leitura) — útil para auditoria e para casar com o `versioning-and-diff.md`.
+
+---
+
+## Erros (todos `400 Bad Request`)
+
+Corpo: `{ "error": "<mensagem>" }`.
+
+| Situação | Requisito | Exemplo de causa |
+| -------- | --------- | ---------------- |
+| `q` ausente ou em branco na busca | 16.7 | `/records/search` sem `q`, ou `q=`+espaços |
+| Paginação fora dos limites | 16.8 | `offset` negativo, `limit <= 0`, `limit > 1000` |
+| `offset`/`limit` não numéricos | 16.8 | `?limit=abc` (falha na conversão do Spring) |
+| `{sourceList}` desconhecido | — | `/api/FOO/records` |
+
+Leituras nunca produzem `5xx` por dado ausente: sem `CURRENT` → página vazia com `total: 0` (`200`).
+
+---
+
+## Exemplos (`curl`)
+
+Consultar por nome um sancionado na SDN:
+
+```bash
+curl -s "http://localhost:8080/api/SDN/records/search?q=ivan&limit=20" | jq
+```
+
+Primeira página da SDN inteira:
+
+```bash
+curl -s "http://localhost:8080/api/SDN/records?offset=0&limit=50" | jq '.total, (.records | length)'
+```
+
+Paginar (página 3, tamanho 100):
+
+```bash
+curl -s "http://localhost:8080/api/SDN/records?offset=200&limit=100" | jq
+```
+
+Erro esperado (busca sem termo):
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:8080/api/SDN/records/search"   # 400
+```
+
+> Para subir a app e ter dados no `CURRENT`, veja o runbook em `operations.md` (Postgres local + profile `bootstrap`).
+
+---
+
+## Como a busca funciona por baixo (para o desenvolvedor)
+
+- `PgQueryApi` resolve o ponteiro `CURRENT` via `VersionStore` e escopa **toda** consulta por `(publish_date, digest)` — garante servir só a `CURRENT` e observar a ativação atomicamente (lê tudo numa transação `@Transactional(readOnly = true)`, então uma ativação concorrente é vista como "antiga" ou "nova", nunca misturada).
+- A busca usa duas colunas derivadas e minusculizadas na tabela `records`, com índices **GIN trigram** (`pg_trgm`): `primary_name_lower` e `alias_search` (todos os aliases concatenados). O predicado é `col LIKE '%needle%' ESCAPE '\'` em ambas.
+- `total` vem de um `COUNT(*)` escopado; a página vem de um `SELECT ... ORDER BY fixed_ref LIMIT :limit OFFSET :offset`.
+
+---
+
+## API-first: postura atual e recomendação
+
+**Postura atual — _code-first_.** Hoje o contrato HTTP é derivado do código: os endpoints, parâmetros e o shape do `Page` nascem das anotações Spring Web em `QueryController`. **Não há** documento OpenAPI versionado, nem Swagger UI, nem geração de clientes. Esta página é a especificação legível por humanos, mas **não** é um artefato executável/validável.
+
+**Recomendação — mover para _spec-first_ (API-first).** Para um consumo externo estável, o ideal é o contrato ser a fonte da verdade, e o código ser verificado contra ele:
+
+- **Opção leve (contrato gerado):** adicionar `springdoc-openapi` (`springdoc-openapi-starter-webmvc-ui`) para expor `/v3/api-docs` (OpenAPI 3) e `/swagger-ui.html`. Baixo custo; o contrato passa a ser publicável e navegável. Ainda é code-first no fundo, mas dá um artefato OpenAPI real.
+- **Opção API-first plena (contrato como fonte):** manter um `openapi.yaml` versionado no repositório como **fonte de verdade**, gerar/validar os DTOs e as assinaturas dos controllers a partir dele (ex.: `openapi-generator`), e adicionar um teste de contrato que falha o build se o código divergir do `openapi.yaml`. Encaixa na disciplina de fitness tests já usada no projeto (ver o ArchUnit em `structure.md`).
+
+**Status:** ambas são **trabalho futuro não implementado**. Quando priorizado, vira tarefa(s) no `tasks.md` (a opção plena é a mais alinhada ao pedido de "API-first").
+
+## Estabilidade e versionamento da API
+
+- **Não há versionamento de rota** (`/v1/...`) hoje. Se a API for exposta externamente, recomenda-se prefixo de versão antes do primeiro consumidor externo.
+- O shape do `Page` e do `InternalModelEntry` reflete o modelo de domínio; mudanças nele são breaking-changes para consumidores e devem passar por contrato (ver API-first acima).
