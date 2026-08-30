@@ -42,6 +42,11 @@ val mockkVersion = "1.13.13"
 val testcontainersVersion = "1.20.4"
 val mockwebserverVersion = "4.12.0"
 
+// ArchUnit — architecture fitness test enforcing the Hexagonal (Ports &
+// Adapters) dependency rule (domain <- application <- adapter). Runs in the
+// normal `test` source set so `check` fails on a layering violation.
+val archUnitVersion = "1.3.0"
+
 // JMH (Java Microbenchmark Harness) — the parse+transform performance guard
 // (task 22.1). Kept in its own source set/task, out of the normal test suite.
 val jmhVersion = "1.37"
@@ -142,6 +147,9 @@ dependencies {
     testImplementation("com.squareup.okhttp3:okhttp-tls:$mockwebserverVersion")
 
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // --- ArchUnit: Hexagonal dependency-rule fitness test (JUnit 5 flavour) ---
+    testImplementation("com.tngtech.archunit:archunit-junit5:$archUnitVersion")
 
     // --- JMH: parse+transform microbenchmark (task 22.1, non-functional guard) ---
     // Core annotations + runner API, plus the annotation processor (driven by
@@ -253,12 +261,12 @@ pitest {
     // Mutate only the pure-logic classes the properties cover.
     targetClasses.set(
         listOf(
-            "com.spike.ofac.pipeline.stages.transform.*", // transform, scope filter, dedup
-            "com.spike.ofac.pipeline.stages.publish.*",    // count-reconciliation gate + pointer decision
-            "com.spike.ofac.pipeline.stages.VersionStage*", // reconciliation formula (expected_count)
-            "com.spike.ofac.pipeline.models.*",            // version-identity + version-pointer value types
-            "com.spike.ofac.pipeline.config.*",            // scope-config validation
-            "com.spike.ofac.pipeline.store.InMemoryVersionStore*", // version-pointer state machine (reference store)
+            "com.spike.ofac.domain.transform.*", // transform, scope filter, dedup
+            "com.spike.ofac.application.publish.*",    // count-reconciliation gate + pointer decision
+            "com.spike.ofac.domain.version.VersionStage*", // reconciliation formula (expected_count)
+            "com.spike.ofac.domain.model.*",            // version-identity + version-pointer value types
+            "com.spike.ofac.domain.scope.*",            // scope-config validation
+            "com.spike.ofac.adapter.out.persistence.InMemoryVersionStore*", // version-pointer state machine (reference store)
         )
     )
 
@@ -266,14 +274,18 @@ pitest {
     // matched above, so future package moves don't silently pull them into scope.
     excludedClasses.set(
         listOf(
-            "com.spike.ofac.pipeline.adapters.*",
-            "com.spike.ofac.pipeline.query.*",
-            "com.spike.ofac.pipeline.scheduler.*",
-            "com.spike.ofac.pipeline.retention.*",
-            "com.spike.ofac.pipeline.stages.obtain.*",
-            "com.spike.ofac.pipeline.stages.persist.*",
-            "com.spike.ofac.pipeline.store.PgVersionStore*",
-            "com.spike.ofac.pipeline.store.FsRawSnapshotStore*",
+            "com.spike.ofac.adapter.out.source.*",
+            "com.spike.ofac.application.port.out.*",
+            "com.spike.ofac.application.port.in.*",
+            "com.spike.ofac.adapter.in.web.*",
+            "com.spike.ofac.adapter.in.scheduling.*",
+            "com.spike.ofac.application.Scheduler*",
+            "com.spike.ofac.application.retention.*",
+            "com.spike.ofac.application.obtain.*",
+            "com.spike.ofac.application.persist.*",
+            "com.spike.ofac.adapter.out.persistence.PgVersionStore*",
+            "com.spike.ofac.adapter.out.persistence.PgQueryApi*",
+            "com.spike.ofac.adapter.out.persistence.FsRawSnapshotStore*",
         )
     )
 
