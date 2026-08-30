@@ -3,6 +3,7 @@ package com.spike.ofac.adapter.`in`.web
 import com.spike.ofac.application.port.`in`.Page as DomainPage
 import com.spike.ofac.domain.model.Address as DomainAddress
 import com.spike.ofac.domain.model.Alias as DomainAlias
+import com.spike.ofac.domain.model.AliasCategory as DomainAliasCategory
 import com.spike.ofac.domain.model.Document as DomainDocument
 import com.spike.ofac.domain.model.EntityType as DomainEntityType
 import com.spike.ofac.domain.model.InternalModelEntry as DomainEntry
@@ -68,7 +69,13 @@ object QueryDtoMapper {
         }
 
     private fun toDto(a: DomainAlias): AliasDto =
-        AliasDto(name = a.name, isPrimary = a.isPrimary, type = a.type)
+        AliasDto(name = a.name, isPrimary = a.isPrimary, category = toDto(a.category), type = a.type)
+
+    private fun toDto(c: DomainAliasCategory): AliasDto.Category =
+        when (c) {
+            DomainAliasCategory.STRONG -> AliasDto.Category.STRONG
+            DomainAliasCategory.WEAK -> AliasDto.Category.WEAK
+        }
 
     private fun toDto(a: DomainAddress): AddressDto =
         AddressDto(raw = a.raw, parts = a.parts, country = a.country)

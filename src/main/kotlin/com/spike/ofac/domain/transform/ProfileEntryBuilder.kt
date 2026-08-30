@@ -2,6 +2,7 @@ package com.spike.ofac.domain.transform
 
 import com.spike.ofac.domain.model.Address
 import com.spike.ofac.domain.model.Alias
+import com.spike.ofac.domain.model.AliasCategory
 import com.spike.ofac.domain.model.Diagnostic
 import com.spike.ofac.domain.model.Document
 import com.spike.ofac.domain.model.EntityType
@@ -146,6 +147,7 @@ class ProfileEntryBuilder {
                     name = raw.fullName,
                     type = raw.aliasTypeId?.let { references.aliasTypeNames[it] },
                     isPrimary = false,
+                    category = if (raw.lowQuality) AliasCategory.WEAK else AliasCategory.STRONG,
                 )
             }
 
@@ -160,8 +162,10 @@ class ProfileEntryBuilder {
             val typeLabel = feature.featureTypeId?.let { references.featureTypeNames[it] }
             when (typeLabel) {
                 "Birthdate" -> feature.datePeriod?.let { toPartialDate(it) }?.let { birthDates += it }
-                "Nationality Country" -> featureText(feature)?.let { nationalities += it }
-                "Citizenship Country" -> featureText(feature)?.let { citizenships += it }
+                "Nationality Country" ->
+                    resolveCountryFeature(feature, references, diagnostics, fixedRef)?.let { nationalities += it }
+                "Citizenship Country" ->
+                    resolveCountryFeature(feature, references, diagnostics, fixedRef)?.let { citizenships += it }
                 "Location" -> {
                     val addr = resolveLocation(feature, references, diagnostics, fixedRef)
                     if (addr != null) addresses += addr
@@ -276,10 +280,57 @@ class ProfileEntryBuilder {
         }
         val raw = location.parts.joinToString(", ") { it.value }
         val country = location.countryId?.let { references.countryNames[it] }
+        // A Location with no usable address parts AND no country (e.g. one that
+        // only carries a LocationAreaCode) has nothing to render as an address.
+        // Do NOT fabricate one from the bare LocationID — that is a garbage
+        // address; report it and drop it (Req 4.7).
+        if (raw.isBlank() && country == null) {
+            diagnostics += unresolved(
+                fixedRef,
+                "Feature ${feature.featureId} LocationID '$locationId' has no address parts or country; skipped",
+            )
+            return null
+        }
         val parts = location.parts
             .filter { it.locPartTypeId != null }
             .associate { (references.locPartTypeNames[it.locPartTypeId] ?: it.locPartTypeId!!) to it.value }
-        return Address(raw = raw.ifBlank { country ?: locationId }, country = country, parts = parts)
+        // At this point raw is non-blank OR country is non-null (guarded above).
+        return Address(raw = raw.ifBlank { country.orEmpty() }, country = country, parts = parts)
+    }
+
+    /**
+     * Resolves a Nationality/Citizenship-country feature to its country string.
+     * The value can be inline (`VersionDetail` text) or carried via a referenced
+     * `Location` (`VersionLocation`); when carried by a Location, prefer the
+     * resolved country label, else join the location's part values. Emits a
+     * diagnostic and returns `null` when neither shape yields a value (Req 4.7).
+     */
+    private fun resolveCountryFeature(
+        feature: RawFeature,
+        references: RawReferenceTables,
+        diagnostics: MutableList<Diagnostic>,
+        fixedRef: FixedRef,
+    ): String? {
+        featureText(feature)?.let { return it }
+        val locationId = feature.locationId ?: return null
+        val location = references.locations[locationId]
+        if (location == null) {
+            diagnostics += unresolved(
+                fixedRef,
+                "Feature ${feature.featureId} references unresolvable LocationID '$locationId'",
+            )
+            return null
+        }
+        val country = location.countryId?.let { references.countryNames[it] }
+        val joined = location.parts.joinToString(", ") { it.value }.ifBlank { null }
+        val value = country ?: joined
+        if (value == null) {
+            diagnostics += unresolved(
+                fixedRef,
+                "Feature ${feature.featureId} LocationID '$locationId' carries no resolvable country value; skipped",
+            )
+        }
+        return value
     }
 
     /** A feature's free-text value (`VersionDetail`), preserved verbatim (Req 4.3). */

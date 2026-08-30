@@ -278,6 +278,7 @@ class AdvancedXmlStreamParser {
     private fun readAlias(reader: XMLStreamReader): RawAlias? {
         val aliasTypeId = reader.attr("AliasTypeID")
         val primary = reader.attr("Primary") == "true"
+        val lowQuality = reader.attr("LowQuality") == "true"
         val nameParts = ArrayList<String>()
         val end = "Alias"
         while (reader.hasNext()) {
@@ -289,12 +290,12 @@ class AdvancedXmlStreamParser {
                 }
                 XMLStreamConstants.END_ELEMENT -> if (reader.localName == end) {
                     val full = nameParts.joinToString(" ").trim()
-                    return if (full.isEmpty()) null else RawAlias(aliasTypeId, primary, full)
+                    return if (full.isEmpty()) null else RawAlias(aliasTypeId, primary, full, lowQuality)
                 }
             }
         }
         val full = nameParts.joinToString(" ").trim()
-        return if (full.isEmpty()) null else RawAlias(aliasTypeId, primary, full)
+        return if (full.isEmpty()) null else RawAlias(aliasTypeId, primary, full, lowQuality)
     }
 
     /**

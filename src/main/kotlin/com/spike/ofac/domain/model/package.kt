@@ -47,14 +47,26 @@ enum class EntityType {
 }
 
 /**
+ * The OFAC alias "Category" column (Req: alias category). In the Advanced XML it
+ * is carried by `Alias/@LowQuality`: a low-quality alias is a **weak** match, a
+ * high-quality one is **strong**. Aliases with no flag default to [STRONG].
+ */
+enum class AliasCategory {
+    STRONG,
+    WEAK,
+}
+
+/**
  * An alternate name for a party. `type` is the source-provided alias category
  * (e.g. "aka", "fka") when present. `is_primary` marks the alias that mirrors
- * the [InternalModelEntry.primaryName].
+ * the [InternalModelEntry.primaryName]. `category` is the OFAC strong/weak
+ * classification (`Alias/@LowQuality`), defaulting to [AliasCategory.STRONG].
  */
 data class Alias(
     val name: String,
     val type: String? = null,
     val isPrimary: Boolean = false,
+    val category: AliasCategory = AliasCategory.STRONG,
 )
 
 /**

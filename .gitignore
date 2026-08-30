@@ -21,6 +21,7 @@ data/
 # --- IDE ---
 .idea/
 *.iml
+.vscode/
 
 # --- Eclipse/VSCode compiled output ---
 bin/

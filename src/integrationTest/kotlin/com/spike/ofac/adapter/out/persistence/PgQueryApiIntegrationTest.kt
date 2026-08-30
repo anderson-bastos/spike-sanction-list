@@ -7,6 +7,7 @@ import com.spike.ofac.application.port.`in`.QueryApi
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.spike.ofac.domain.model.Alias
+import com.spike.ofac.domain.model.AliasCategory
 import com.spike.ofac.domain.model.EntityType
 import com.spike.ofac.domain.model.FixedRef
 import com.spike.ofac.domain.model.InternalModelEntry
@@ -295,6 +296,29 @@ class PgQueryApiIntegrationTest {
         // Alias contains, case-insensitive (Req 16.3).
         queryApi.searchByName("FOREIGNER", SourceList.SDN).records
             .map { it.fixedRef.value } shouldContainExactlyInAnyOrder listOf("2")
+    }
+
+    @Test
+    fun `alias category (strong or weak) round-trips through JSONB persistence`() {
+        val record = InternalModelEntry(
+            fixedRef = FixedRef("15252"),
+            entityType = EntityType.Individual,
+            primaryName = "FLORES PACHECO Cenobio",
+            aliases = listOf(
+                Alias(name = "CHECO", category = AliasCategory.WEAK),
+                Alias(name = "CHEKO", category = AliasCategory.WEAK),
+                Alias(name = "CASTRO VILLA", category = AliasCategory.STRONG),
+            ),
+            sanctionPrograms = listOf("PROGRAM"),
+        )
+        activate(vid('a'), record)
+
+        val readBack = queryApi.list(SourceList.SDN, offset = 0, limit = 50).records.single()
+        readBack.aliases.associate { it.name to it.category } shouldBe mapOf(
+            "CHECO" to AliasCategory.WEAK,
+            "CHEKO" to AliasCategory.WEAK,
+            "CASTRO VILLA" to AliasCategory.STRONG,
+        )
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.spike.ofac.domain.transform
 
+import com.spike.ofac.domain.model.AliasCategory
 import com.spike.ofac.domain.model.EntityType
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldHaveSize
@@ -189,6 +190,164 @@ class TransformEdgeCasesTest {
 
         failed.cause shouldBe TransformResult.Failed.Cause.UNPARSEABLE_RECORD
         failed.fixedRef shouldBe "12345"
+    }
+
+    // --- Alias category (weak/strong) — LowQuality attribute ------------------
+
+    @Test
+    fun `alias LowQuality maps to WEAK and non-low-quality maps to STRONG category`() {
+        val snapshot = snapshotWith(
+            listOf(
+                individual(
+                    fixedRef = "15252",
+                    profileId = "p1",
+                    aliases = listOf(
+                        // Primary name (mirrors primaryName) — not in aliases[].
+                        RawAlias(aliasTypeId = null, primary = true, fullName = "FLORES PACHECO Cenobio"),
+                        // Weak (LowQuality="true") aliases.
+                        RawAlias(aliasTypeId = null, primary = false, fullName = "CHECO", lowQuality = true),
+                        RawAlias(aliasTypeId = null, primary = false, fullName = "CHEKO", lowQuality = true),
+                        // Strong (LowQuality="false") alias.
+                        RawAlias(aliasTypeId = null, primary = false, fullName = "CASTRO VILLA", lowQuality = false),
+                    ),
+                ),
+            ),
+        )
+
+        val ok = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>()
+        val entry = ok.entries.single()
+
+        val byName = entry.aliases.associate { it.name to it.category }
+        byName["CHECO"] shouldBe AliasCategory.WEAK
+        byName["CHEKO"] shouldBe AliasCategory.WEAK
+        byName["CASTRO VILLA"] shouldBe AliasCategory.STRONG
+    }
+
+    @Test
+    fun `an alias with no LowQuality flag defaults to STRONG category`() {
+        val snapshot = snapshotWith(
+            listOf(
+                individual(
+                    fixedRef = "12345",
+                    profileId = "p1",
+                    aliases = listOf(
+                        primaryName("Jane Doe"),
+                        RawAlias(aliasTypeId = null, primary = false, fullName = "Janie"),
+                    ),
+                ),
+            ),
+        )
+
+        val ok = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>()
+        ok.entries.single().aliases.single().category shouldBe AliasCategory.STRONG
+    }
+
+    // --- Citizenship / Nationality carried via a referenced Location ----------
+
+    @Test
+    fun `citizenship carried via a referenced Location is resolved, not dropped`() {
+        // FeatureType 11 = Citizenship Country; the value "Mexico" is carried as
+        // a VersionLocation pointing at a Location whose LocationPart holds it.
+        val profile = individual(
+            fixedRef = "15252",
+            profileId = "p1",
+            aliases = listOf(primaryName("FLORES PACHECO Cenobio")),
+        ).copy(
+            features = listOf(
+                RawFeature(
+                    featureId = "f1",
+                    featureTypeId = "11", // Citizenship Country
+                    locationId = "186143",
+                ),
+            ),
+        )
+        val snapshot = ParsedSnapshot(
+            publishDate = null,
+            profiles = listOf(profile),
+            references = RawReferenceTables(
+                featureTypeNames = mapOf("11" to "Citizenship Country"),
+                locations = mapOf(
+                    "186143" to RawLocation(
+                        locationId = "186143",
+                        parts = listOf(RawLocationPart(locPartTypeId = "1", value = "Mexico")),
+                        countryId = null,
+                    ),
+                ),
+                sanctionsEntries = listOf(
+                    RawSanctionsEntry(id = "e1", profileId = "p1", listId = null, programNames = listOf("SDGT")),
+                ),
+            ),
+        )
+
+        val ok = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>()
+        ok.entries.single().citizenships shouldBe listOf("Mexico")
+    }
+
+    // --- No phantom address from a Location with no address parts -------------
+
+    @Test
+    fun `a Location feature with no parts and no country does not fabricate an address`() {
+        // FeatureType 25 = Location; the referenced Location has no LocationPart
+        // and no country (only a LocationAreaCode). The builder must NOT emit an
+        // Address whose raw is the bare LocationID.
+        val profile = individual(
+            fixedRef = "15252",
+            profileId = "p1",
+            aliases = listOf(primaryName("FLORES PACHECO Cenobio")),
+        ).copy(
+            features = listOf(
+                RawFeature(featureId = "f1", featureTypeId = "25", locationId = "22735"),
+            ),
+        )
+        val snapshot = ParsedSnapshot(
+            publishDate = null,
+            profiles = listOf(profile),
+            references = RawReferenceTables(
+                featureTypeNames = mapOf("25" to "Location"),
+                locations = mapOf(
+                    "22735" to RawLocation(locationId = "22735", parts = emptyList(), countryId = null),
+                ),
+                sanctionsEntries = listOf(
+                    RawSanctionsEntry(id = "e1", profileId = "p1", listId = null, programNames = listOf("SDGT")),
+                ),
+            ),
+        )
+
+        val ok = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>()
+        ok.entries.single().addresses.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a Location feature with real parts still builds an address`() {
+        val profile = individual(
+            fixedRef = "999",
+            profileId = "p1",
+            aliases = listOf(primaryName("Jane Doe")),
+        ).copy(
+            features = listOf(
+                RawFeature(featureId = "f1", featureTypeId = "25", locationId = "500"),
+            ),
+        )
+        val snapshot = ParsedSnapshot(
+            publishDate = null,
+            profiles = listOf(profile),
+            references = RawReferenceTables(
+                featureTypeNames = mapOf("25" to "Location"),
+                locations = mapOf(
+                    "500" to RawLocation(
+                        locationId = "500",
+                        parts = listOf(RawLocationPart(locPartTypeId = "1", value = "Mexico City")),
+                        countryId = null,
+                    ),
+                ),
+                sanctionsEntries = listOf(
+                    RawSanctionsEntry(id = "e1", profileId = "p1", listId = null, programNames = listOf("SDGT")),
+                ),
+            ),
+        )
+
+        val ok = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>()
+        ok.entries.single().addresses.single().raw shouldBe "Mexico City"
     }
 
     @Test

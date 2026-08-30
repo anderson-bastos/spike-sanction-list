@@ -48,6 +48,8 @@ data class RawAlias(
     val primary: Boolean,
     /** The `NamePartValue` texts joined with spaces, preserved verbatim as UTF-8 (Req 4.3). */
     val fullName: String,
+    /** `Alias/@LowQuality` == "true" — the OFAC "Category": true → weak, false/absent → strong. */
+    val lowQuality: Boolean = false,
 )
 
 /**
