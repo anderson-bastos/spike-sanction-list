@@ -21,10 +21,11 @@ The architecture is a direct consequence of the evidence collected in the spike,
 
 The requirements are technology-agnostic and the interfaces below stay expressed as language-neutral contracts. This design names the concrete stack that realizes those contracts, and where the spike's evidence points clearly it names concrete, evidence-backed choices and justifies them:
 
-**Implementation stack:** the pipeline is realized in **Kotlin on Spring Boot**, built with **Gradle (Kotlin DSL)**. **Spring Web** serves the read-only `Query_API` (the paginated-list and name-search endpoints). The `Scheduler` contract is realized with Spring **`@Scheduled`** on a configurable, bounded interval defaulting to sub-daily — no OS-level cron is required. Persistence is **PostgreSQL** accessed via **Spring Data (JDBC/JPA) or jOOQ** (the exact data-access library is an implementation choice), with declarative **`@Transactional`** providing the atomic pointer swap required by Req 9 (the `CURRENT`/`PREVIOUS`/`N_MINUS_2` repoint and window rotation commit in a single transaction). XML is parsed with **StAX** (`javax.xml.stream.XMLStreamReader`) for a streaming, memory-bounded parse. Property-based testing uses **jqwik** on the JVM, and unit tests use **MockK** for mocking collaborators. The processed `Internal_Model`, version metadata, and pointers live in PostgreSQL; the raw snapshot lives in a local versioned folder (no object storage). The persistence posture below is unchanged in substance.
+**Implementation stack:** the pipeline is realized in **Kotlin on Spring Boot**, built with **Gradle (Kotlin DSL)**. The code is organized in **Hexagonal (Ports & Adapters)** layers — `domain` (pure core), `application` (use-case orchestration + ports), and `adapter` (concrete IO + Spring wiring) — with dependencies pointing inward only (`adapter → application → domain`); this dependency rule is enforced by an **ArchUnit** fitness test (`HexagonalArchitectureTest`) that runs under `check` (see "Architecture layering" below). **Spring Web** serves the read-only `Query_API` (the paginated-list and name-search endpoints). The `Scheduler` contract is realized with Spring **`@Scheduled`** on a configurable, bounded interval defaulting to sub-daily — no OS-level cron is required. Persistence is **PostgreSQL** accessed via **Spring Data (JDBC/JPA) or jOOQ** (the exact data-access library is an implementation choice), with declarative **`@Transactional`** providing the atomic pointer swap required by Req 9 (the `CURRENT`/`PREVIOUS`/`N_MINUS_2` repoint and window rotation commit in a single transaction). XML is parsed with **StAX** (`javax.xml.stream.XMLStreamReader`) for a streaming, memory-bounded parse. Property-based testing uses **jqwik** on the JVM, and unit tests use **MockK** for mocking collaborators. The processed `Internal_Model`, version metadata, and pointers live in PostgreSQL; the raw snapshot lives in a local versioned folder (no object storage). The persistence posture below is unchanged in substance.
 
 - **Ingestion source format:** Advanced XML for every OFAC list (`spike` §2 — canonical, lossless; CSV and legacy XML lose relationships and flatten multi-valued fields).
-- **Change detection:** HTTP `HEAD` reading `Last-Modified` + `Digest: sha-256` (`spike` §1, §6).
+- **Concrete OFAC SDN source:** the live OFAC Sanctions List Service (SLS) endpoint `https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML`. It is externalized as `ofac.source.sdn.url` and wired as the SDN `Source_List` (see "Deployment & bootstrap").
+- **Change detection:** HTTP `HEAD` reading `Last-Modified` + `Digest`. Discovered at runtime, the live SLS advertises the `Digest` **only on the HEAD** (format `sha-256<hex>` — the algorithm token glued directly to a lowercase hex digest, no `=` separator, hex not base64); its GET **302-redirects to S3** and the final response does **not** repeat the `Digest` header (it is chunked, with no `Content-Length`). The pipeline therefore carries the HEAD-advertised digest forward into `validate` (`spike` §1, §6; refines the Property 2 / Req 3 realization — see "obtain" and "SourceAdapter").
 - **Parse strategy:** streaming/iterative parse (StAX `XMLStreamReader` on the JVM) that advances per `DistinctParty` and clears/advances past each element to bound memory, since parse is the sole cost driver (`spike` §9).
 - **Version identity:** `Publish_Date` + SHA-256 `Digest` (`spike` §10 — `Publish_Date` alone is insufficient because more than one publication per day is possible).
 - **Persistence engine (`VersionStore` / `Data_Store`):** a **local PostgreSQL database** is the single, chosen storage engine for the processed `Internal_Model` records, the version metadata, and the `CURRENT`/`PREVIOUS`/`N_MINUS_2` pointers. The evidence supports one relational DB: the in-scope volume is small (`spike` §5, §9 — ≈19,249 SDN + 481 Consolidated in scope, a few GB/year), so a single database comfortably holds the processed model, the three HOT versions, and version metadata. The decisive advantage over object storage is that a relational **transaction gives the atomic pointer swap required by Req 9 for free** (object storage could not). Immutability (Req 7) is enforced by writing versions as **insert-only rows** — never updating or deleting within a persisted version. This is a **local** deployment, suitable for the current MVP; the design stays swappable behind the `VersionStore` contract if a different engine is needed later.
@@ -40,6 +41,18 @@ The scheduler contract is realized by Spring **`@Scheduled`**, with only the pol
 - **What to preserve** (Req 14): decided — the raw snapshot is preserved as an immutable **file in the local `Raw_Snapshot_Store`** (Req 15) and the processed model lives in the PostgreSQL `Data_Store`. Faithful reconstruction requires the **raw snapshot file**. The retention **period** remains the only open item.
 
 ## Architecture
+
+### Architecture layering (Hexagonal / Ports & Adapters)
+
+The code is organized in three concentric layers; **dependencies point inward only** (`adapter → application → domain`), the application never depends on the adapter, and the domain is framework-free. The six source-independent stages map onto these layers rather than living in feature/stage packages.
+
+| Layer | Packages | Contents |
+| ----- | -------- | -------- |
+| **domain** (pure core, framework-free) | `com.spike.ofac.domain.{model, transform, version, scope}` | `model` (`VersionId`, `VersionMetadata`, `VersionPointers`, `ScopeConfig`, `RetentionPolicy`, `InternalModelEntry`); `transform` (`AdvancedXmlStreamParser`, `ScopeFilter`, `CrossListDedup`, `ProfileEntryBuilder`, `Transform`); `version` (`Validate`, `VersionStage`); `scope` (`ScopeConfigValidator`). |
+| **application** (use cases + ports) | `com.spike.ofac.application` (+ `obtain`/`persist`/`publish`/`retention`), `application.port.in`, `application.port.out` | `Scheduler` (with `SourceListConfig`, `CycleOutcome`) and the obtain/persist/publish/retention orchestration. Ports: `port.in` (`QueryApi`, `Page`, exceptions); `port.out` (`VersionStore` incl. `PointerKind`, `RawSnapshotStore`, `SourceAdapter` incl. `HeadResponse`/`HttpResponse`/`MappingResult`/`SourceEntityType`). |
+| **adapter** (concrete IO + Spring wiring) | `com.spike.ofac.adapter.{in.web, in.scheduling, out.persistence, out.source, config}` | `in.web` (`QueryController`); `in.scheduling` (`SchedulerTrigger`, `SchedulerConfiguration`, `OfacSourceListWiring`, `BootstrapImportRunner`); `out.persistence` (`PgVersionStore`, `FsRawSnapshotStore`, `InMemoryVersionStore`, `PgQueryApi`); `out.source` (`OfacAdapter`, `UnAdapter`, `EuAdapter`, `SourceAdapterSupport`, `JdkHttpTransport`); `config` (`RawSnapshotStoreProperties`, `SchedulerProperties`). |
+
+**Dependency rule.** The application talks only to its own port interfaces (`port.in` / `port.out`); concrete adapters are plugged in from the outside. The `domain` depends on nothing in `application` or `adapter` and on no framework (no Spring, JDBC, Jackson, or HTTP client), keeping it unit-testable without any container or IO. This rule is enforced by the **ArchUnit fitness test** `HexagonalArchitectureTest` (in the `test` source set, run under `check`): four rules assert layers only depend inward, the domain does not depend on application/adapter, the application does not depend on adapter, and the domain stays free of Spring/JDBC/Jackson/HTTP.
 
 ### Component and data flow
 
@@ -153,6 +166,17 @@ CycleOutcome = { status: SKIPPED_NO_CHANGE | ACTIVATED | FAILED,
 
 The Scheduler owns no ingestion logic; it invokes the stage pipeline and records the `CycleOutcome` so the next scheduled tick retries after a failure (Req 1.6, Req 11.2).
 
+### Deployment & bootstrap
+
+The pipeline runs against a **local PostgreSQL `Data_Store`** wired in `application.yml` (`spring.datasource.url = jdbc:postgresql://localhost:5432/ofac`, user/pass `ofac`/`ofac`); the schema is applied from `src/main/resources/db/schema.sql`. The `Raw_Snapshot_Store` folder (`ofac.raw-snapshot-store.folder`, default `./data/raw-snapshot-store`) and the scheduler interval (`ofac.scheduler.interval`, default `6h`, bounded `[1m .. 1d]`) are configured there too.
+
+Two wiring pieces make the first real import possible (previously the app started with an **empty** source list by design, pending business decisions):
+
+- **`OfacSourceListWiring`** (`adapter.in.scheduling`): a `SourceListConfig` bean for **SDN** — the live SLS URL (externalized as `ofac.source.sdn.url`, gated by `ofac.source.sdn.enabled`, default `true`), `ScopeConfig.SDN_ONLY`, and the credential-free `OfacAdapter`. `SchedulerConfiguration` collects every `SourceListConfig` bean, so this is what gives the running scheduler something to ingest.
+- **`BootstrapImportRunner`** (`adapter.in.scheduling`): an `ApplicationRunner` behind the Spring profile **`bootstrap`** that fires one `scheduler.tick()` at startup for an on-demand import (`--spring.profiles.active=bootstrap`). Outside that profile the scheduled trigger drives ingestion on the configured interval (default 6h) and this runner is absent.
+
+**First live import (verified end-to-end, as evidence.)** The SDN version with `publish_date` 2026-08-28 **ACTIVATED** with **17,439 records** persisted (**9,922 Entity + 7,517 Individual**). Counts reconciled exactly: `record_count = expected_count = persisted_count = 17439`, `out_of_scope = 0`, `overlap = 0`, `integrity_ok = true`. The raw snapshot was stored under `data/raw-snapshot-store/<publish_date>_<digest>.xml` and `CURRENT` resolved. This ran on local PostgreSQL (Docker `postgres:16`, db/user/pass `ofac`, `localhost:5432`).
+
 ### obtain
 
 ```
@@ -169,6 +193,8 @@ DownloadResult = SNAPSHOT(bytes, advertised_digest?, content_length?)
 ```
 
 Change detection compares the HEAD `Digest` against the digest of the most recently ingested `Version` (Req 1.3, 1.4). If the `Digest` header is absent, the stage falls back to comparing `Publish_Date` + `Record_Count` read from the snapshot body (Req 1.5). Download completeness (e.g., `Content-Length` vs bytes received) is checked before acceptance (Req 2.4); any failure discards the partial download and leaves `CURRENT` unchanged (Req 2.5).
+
+**Real OFAC digest source (HEAD vs GET), observed at runtime.** The live OFAC SLS advertises the `Digest` on the **HEAD** but its **GET 302-redirects to S3 (GovCloud)**, and that final S3 response does **not** repeat the `Digest` header (it is chunked, no `Content-Length`). Relying on the GET digest alone made `validate` reject every real snapshot as `ABSENT_DIGEST`. The `Scheduler` therefore **carries the HEAD-advertised digest forward** into `validate` (falling back to any digest the GET response carries, e.g. sources that advertise it on the GET as the MockWebServer integration tests do). This refines the realization of Property 2 / Req 3 without changing the requirement: the version's *identity* digest is still the SHA-256 recomputed over the downloaded bytes; the advertised HEAD digest is what integrity validation checks against.
 
 ### validate
 
@@ -261,7 +287,7 @@ interface SourceAdapter:
   entity_type_of(raw_profile) -> "Individual"|"Entity"|"Vessel"|"Aircraft"|Unknown
 ```
 
-- `OfacAdapter`: no credentials (Req 2.3); maps `PartySubTypeID` per the observed ReferenceValueSet.
+- `OfacAdapter`: no credentials (Req 2.3); maps `PartySubTypeID` per the observed ReferenceValueSet. Its `Digest` header parsing accepts **three** forms: the live OFAC glued `sha-256<hex>` / `sha256<hex>` (token glued directly to a lowercase hex digest, no separator), the RFC-3230 `sha-256=<base64>` form, and a bare hex digest — all normalized to the same `Sha256Digest` (see the runtime digest-format note under "Change detection"; regression test `JdkHttpTransportDigestHeaderTest`).
 - Future `UnAdapter` / `EuAdapter`: same core; `EuAdapter` supplies a token (Req 13.3), and a missing/invalid token aborts obtain while retaining the last good version (Req 13.5). (`spike` §12.)
 
 ### VersionStore
@@ -634,6 +660,8 @@ For behavior that is external or does not vary with input (prework INTEGRATION/S
 - HEAD/GET against a **MockWebServer/WireMock** endpoint serving a fixture (or recorded responses): headers read (Req 1.2), HTTPS GET with timeouts (Req 2.1), new `CURRENT` resolvable within 5 s (Req 9.5).
 - Scheduler smoke test: the Spring `@Scheduled` trigger fires per `Source_List` on the configured interval; interval-bounds validation and sub-daily default (Req 1.1).
 - Reusable-core structural test: a second adapter drives the same six stages unchanged (Req 13.1, 13.2).
+- **Architecture fitness test (ArchUnit):** `HexagonalArchitectureTest` (in the `test` source set, run under `check`) enforces the Hexagonal dependency rule — layers only depend inward (`adapter → application → domain`), the domain does not depend on application/adapter, the application does not depend on adapter, and the domain stays free of Spring/JDBC/Jackson/HTTP.
+- **Real-OFAC digest regressions** (surfaced by the first live import, not covered by the earlier MockWebServer tests): `JdkHttpTransportDigestHeaderTest` covers the digest header formats — the live glued `sha-256<hex>` form plus the RFC-3230 base64 and bare-hex forms; and a new `SchedulerCycleSmokeTest` case ("digest advertised on HEAD but absent on GET still validates and activates") covers the HEAD-only digest carry-forward.
 - Failure-observability examples: each stage's failure yields an outcome naming that stage (Req 11.2); a fresh cycle after a failed one succeeds reading only the source, not intermediate artifacts (Req 11.3).
 - Query API endpoints against a **Testcontainers (PostgreSQL)** `Data_Store` with the real `CURRENT` pointer: the list and name-search endpoints return records only from `CURRENT` (never `PREVIOUS`/`N_MINUS_2`/`COLD`, Req 16.5); reads stay consistent across an in-flight activation, resolving to either the old or the new `CURRENT` and never a partial dataset (Req 16.6); the response carries `total`/`offset`/`limit` metadata (Req 16.1).
 
