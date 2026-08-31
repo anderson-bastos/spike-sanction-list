@@ -10,7 +10,7 @@ Propósito: descrever como **consultar um sancionado** na API real que roda hoje
 
 - **O que dá para perguntar:** "quais sancionados estão na lista SDN agora?" (listagem paginada) e "existe alguém cujo nome ou apelido contém _X_?" (busca por nome).
 - **Sempre sobre a foto vigente:** toda resposta vem da versão `CURRENT` — a última importação ativada. Consultas históricas (versões anteriores) e "quem entrou/saiu" **não** são atendidas por esta API hoje (ver `versioning-and-diff.md`).
-- **Busca por nome** é _contains_ (contém), **sem diferenciar maiúsculas/minúsculas**, e cobre o **nome principal e todos os apelidos (aliases)**. Ex.: `q=ivan` acha "Ivanov" e um alias "Big Ivan".
+- **Busca por nome/alias** (`/records/search?q=`) é _contains_ (contém), **sem diferenciar maiúsculas/minúsculas**, e cobre o **nome principal e todos os apelidos (aliases)** em um só parâmetro `q` — paginada como a listagem. Ex.: `q=ivan` acha "Ivanov" (nome) e "Big Ivan" (alias). Não há endpoint separado por nome vs alias: a busca unificada já atende os dois.
 - **Escopo dos dados:** apenas pessoas (`Individual`) e entidades (`Entity`). Embarcações (vessels) e aeronaves (aircraft) ficam fora por definição.
 
 ---
@@ -74,20 +74,33 @@ Casa `q` (case-insensitive, _contains_) contra **`primary_name` OU qualquer alia
   "fixedRef": "12345",
   "entityType": "Individual",           // "Individual" | "Entity" (apenas in-scope)
   "primaryName": "Ivan Ivanov",
-  "aliases": [ { "name": "Big Ivan", "type": "aka", "isPrimary": false } ],
+  "title": "Chief Ideological Figure of ...",   // 0..1; cargo/título (FeatureType 26)
+  "placeOfBirth": "Jabaliyah, Gaza Strip",       // 0..1 (FeatureType 9)
+  "gender": "Male",                              // 0..1; "Male" | "Female" (FeatureType 224)
+  "aliases": [ { "name": "Big Ivan", "type": "A.K.A.", "isPrimary": false, "category": "weak" } ],
   "addresses": [ { "raw": "Skořepka 1058/8 Staré Město", "country": "CZ", "parts": {} } ],
   "documents": [ { "type": "Passport", "number": "X12345", "issuer": "RU" } ],
   "nationalities": ["RU"],
-  "citizenships": ["RU"],
+  "citizenships": ["Mexico"],
   "birthDates": [ { "year": 1970, "month": null, "day": null, "period": null } ],
   "sanctionPrograms": ["SDGT"],         // 1..N — sempre ao menos um
-  "remarks": ["..."],
+  "features": [                          // 0..N — demais campos da lista, preservados p/ triagem/match
+    { "type": "SWIFT/BIC", "value": "HAVIGB2L" },
+    { "type": "Digital Currency Address - XBT", "value": "12QtD5BFwRsdNsAZY76UVE1xyCGNTojH9h" },
+    { "type": "Phone Number", "value": "+55 11 5555-5555" }
+  ],
+  "remarks": ["..."],                   // apenas remarks reais (não mais o dump de features)
   "relationships": [ { "toFixedRef": "67890", "relationType": "linked-to" } ],
   "versionId": { "publishDate": "2026-08-28", "digest": "ec9b2e0c…<64 hex>" }
 }
 ```
 
 O campo `versionId` diz de **qual versão** o registro veio (a `CURRENT` no momento da leitura) — útil para auditoria e para casar com o `versioning-and-diff.md`.
+
+**Campos promovidos e `features[]` (para o analista).** Todos os campos relevantes da lista da OFAC são persistidos e consultáveis:
+- **`title`, `placeOfBirth`, `gender`** — campos próprios (0..1). `gender` sai como `Male`/`Female` (resolvido da tabela de referência da OFAC).
+- **`aliases[].category`** — `strong` ou `weak` (a coluna *Category* da tela da OFAC; deriva de `LowQuality`). Um `weak` alias, sozinho, tipicamente não deve disparar match.
+- **`features[]`** — lista tipada `{type, value}` que **preserva todos os demais campos** da lista (Phone, Email, Website, SWIFT/BIC, Digital Currency Address, D-U-N-S, Organization Type, Additional/Secondary sanctions info, etc.). É o catch-all consultável para triagem/match, robusto a novos tipos que a OFAC adicione. Campos de vessel/aircraft ficam fora (perfis fora de escopo). O snapshot bruto no `Raw_Snapshot_Store` continua preservando 100% do XML para reconstrução fiel.
 
 ---
 

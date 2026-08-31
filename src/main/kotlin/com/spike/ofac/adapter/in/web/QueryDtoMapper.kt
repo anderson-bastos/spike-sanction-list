@@ -18,7 +18,9 @@ import com.spike.ofac.adapter.web.generated.model.Page as PageDto
 import com.spike.ofac.adapter.web.generated.model.PartialDate as PartialDateDto
 import com.spike.ofac.adapter.web.generated.model.Period as PeriodDto
 import com.spike.ofac.adapter.web.generated.model.Relationship as RelationshipDto
+import com.spike.ofac.adapter.web.generated.model.SourceFeature as SourceFeatureDto
 import com.spike.ofac.adapter.web.generated.model.VersionId as VersionIdDto
+import com.spike.ofac.domain.model.SourceFeature as DomainSourceFeature
 
 /**
  * Maps the domain model onto the **contract DTOs generated from `openapi.yaml`**
@@ -59,8 +61,15 @@ object QueryDtoMapper {
             sanctionPrograms = e.sanctionPrograms,
             remarks = e.remarks,
             relationships = e.relationships.map(::toDto),
+            features = e.features.map(::toDto),
+            title = e.title,
+            placeOfBirth = e.placeOfBirth,
+            gender = e.gender,
             versionId = e.versionId?.let(::toDto),
         )
+
+    private fun toDto(f: DomainSourceFeature): SourceFeatureDto =
+        SourceFeatureDto(type = f.type, value = f.value)
 
     private fun toDto(t: DomainEntityType): EntryDto.EntityType =
         when (t) {

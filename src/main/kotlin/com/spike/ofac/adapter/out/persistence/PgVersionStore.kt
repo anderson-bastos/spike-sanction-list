@@ -294,19 +294,25 @@ class PgVersionStore(
             .addValue("sanctionPrograms", json(entry.sanctionPrograms))
             .addValue("remarks", json(entry.remarks))
             .addValue("relationships", json(entry.relationships))
+            .addValue("features", json(entry.features))
+            .addValue("title", entry.title)
+            .addValue("placeOfBirth", entry.placeOfBirth)
+            .addValue("gender", entry.gender)
             .addValue("aliasSearch", aliasSearch(entry))
         jdbc.update(
             """
             INSERT INTO records (
                 publish_date, digest, fixed_ref, entity_type, primary_name,
                 aliases, addresses, documents, nationalities, citizenships,
-                birth_dates, sanction_programs, remarks, relationships, alias_search
+                birth_dates, sanction_programs, remarks, relationships, features,
+                title, place_of_birth, gender, alias_search
             ) VALUES (
                 :publishDate, :digest, :fixedRef, :entityType, :primaryName,
                 CAST(:aliases AS jsonb), CAST(:addresses AS jsonb), CAST(:documents AS jsonb),
                 CAST(:nationalities AS jsonb), CAST(:citizenships AS jsonb),
                 CAST(:birthDates AS jsonb), CAST(:sanctionPrograms AS jsonb),
-                CAST(:remarks AS jsonb), CAST(:relationships AS jsonb), :aliasSearch
+                CAST(:remarks AS jsonb), CAST(:relationships AS jsonb), CAST(:features AS jsonb),
+                :title, :placeOfBirth, :gender, :aliasSearch
             )
             """.trimIndent(),
             params,

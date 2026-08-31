@@ -10,6 +10,7 @@ import com.spike.ofac.domain.model.FixedRef
 import com.spike.ofac.domain.model.InternalModelEntry
 import com.spike.ofac.domain.model.PartialDate
 import com.spike.ofac.domain.model.Relationship
+import com.spike.ofac.domain.model.SourceFeature
 
 /**
  * Reference resolution + `InternalModelEntry` construction (task 5.1, Req 4.1, 4.2, 4.3, 4.5, 4.6).
@@ -22,10 +23,15 @@ import com.spike.ofac.domain.model.Relationship
  *
  * ### References resolved (Req 4.2)
  *  - **Feature** → its `FeatureType` label routes the value: birthdate (8),
- *    place of birth (9), nationality country (10), citizenship country (11),
- *    location (25), and any other type becomes a remark. Birthdates keep their
- *    partial shape (Req 4.6); location features resolve their `LocationID` to a
- *    [RawLocation] to build an [Address].
+ *    place of birth (9 → `placeOfBirth`), nationality country (10), citizenship
+ *    country (11), location (25), title (26 → `title`), gender (224 → `gender`,
+ *    resolved via `DetailReference`). Every other in-scope feature with a
+ *    resolvable scalar value becomes a typed [SourceFeature] in
+ *    [InternalModelEntry.features] — NOT a remark. Birthdates keep their partial
+ *    shape (Req 4.6); location features resolve their `LocationID` to a
+ *    [RawLocation] to build an [Address]. A feature value may be inline
+ *    (`VersionDetail` text) or a `DetailReferenceID` resolved against the
+ *    `DetailReferenceValues` table.
  *  - **IDRegDocument** → linked to the party by `IdentityID`, its
  *    `IDRegDocTypeID` resolved to a document-type label ([Document.type]).
  *  - **SanctionsEntry** → linked to the party by `ProfileID`, contributing its
@@ -157,6 +163,12 @@ class ProfileEntryBuilder {
         val citizenships = ArrayList<String>()
         val birthDates = ArrayList<PartialDate>()
         val remarks = ArrayList<String>()
+        val features = ArrayList<SourceFeature>()
+        // Named 0..1 scalar features; keep the FIRST occurrence and route any
+        // extras into features[] so nothing is silently dropped.
+        var title: String? = null
+        var placeOfBirth: String? = null
+        var gender: String? = null
 
         for (feature in profile.features) {
             val typeLabel = feature.featureTypeId?.let { references.featureTypeNames[it] }
@@ -170,9 +182,34 @@ class ProfileEntryBuilder {
                     val addr = resolveLocation(feature, references, diagnostics, fixedRef)
                     if (addr != null) addresses += addr
                 }
-                "Place of Birth" -> featureText(feature)?.let { remarks += "Place of Birth: $it" }
-                else -> featureText(feature)?.let { text ->
-                    remarks += if (typeLabel != null) "$typeLabel: $text" else text
+                "Place of Birth" -> featureValue(feature, references).let { value ->
+                    if (value != null) {
+                        if (placeOfBirth == null) placeOfBirth = value else features += SourceFeature(typeLabel, value)
+                    }
+                }
+                "Title" -> featureValue(feature, references).let { value ->
+                    if (value != null) {
+                        if (title == null) title = value else features += SourceFeature(typeLabel, value)
+                    }
+                }
+                "Gender" -> featureValue(feature, references).let { value ->
+                    if (value != null) {
+                        if (gender == null) gender = value else features += SourceFeature(typeLabel, value)
+                    }
+                }
+                else -> {
+                    val value = featureValue(feature, references)
+                    if (value != null) {
+                        features += SourceFeature(type = typeLabel ?: feature.featureTypeId ?: "Unknown", value = value)
+                    } else if (feature.detailReferenceId != null || feature.locationId != null) {
+                        // Carried a reference we could not resolve to any scalar value.
+                        // Emit a diagnostic and continue — never abort (Req 4.7).
+                        diagnostics += unresolved(
+                            fixedRef,
+                            "Feature ${feature.featureId} (type '${typeLabel ?: feature.featureTypeId}') " +
+                                "has no resolvable scalar value; skipped",
+                        )
+                    }
                 }
             }
         }
@@ -257,6 +294,10 @@ class ProfileEntryBuilder {
             sanctionPrograms = sanctionPrograms,
             remarks = remarks,
             relationships = relationships,
+            title = title,
+            placeOfBirth = placeOfBirth,
+            gender = gender,
+            features = features,
             versionId = null, // stamped at persist (Req 7.4)
         )
         return EntryResult(fixedRefValue, entry, diagnostics)
@@ -335,6 +376,19 @@ class ProfileEntryBuilder {
 
     /** A feature's free-text value (`VersionDetail`), preserved verbatim (Req 4.3). */
     private fun featureText(feature: RawFeature): String? = feature.detailValue?.ifBlank { null }
+
+    /**
+     * A feature's resolved scalar value (Req 4.2, 4.3): prefer the inline
+     * `VersionDetail` text; otherwise, if the value was carried as a
+     * `DetailReferenceID`, resolve it via [RawReferenceTables.detailReferenceNames]
+     * (e.g. Gender 91526 → "Male"). Returns `null` when neither shape yields a
+     * non-blank value. Preserves the source string verbatim.
+     */
+    private fun featureValue(feature: RawFeature, references: RawReferenceTables): String? {
+        featureText(feature)?.let { return it }
+        val refId = feature.detailReferenceId ?: return null
+        return references.detailReferenceNames[refId]?.ifBlank { null }
+    }
 
     /**
      * Converts a raw [RawDatePeriod] into a [PartialDate], preserving partial

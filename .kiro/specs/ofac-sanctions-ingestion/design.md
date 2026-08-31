@@ -387,11 +387,24 @@ InternalModelEntry:
   citizenships:     [string]            # 0..N (Req 4.4)
   birth_dates:      [PartialDate]       # 0..N; year-only or DatePeriod preserved (Req 4.6)
   sanction_programs:[string]            # 1..N; universal in source, 100% present (Req 4.4)
-  remarks:          [string]            # 0..N (Req 4.4)
+  title:            string?             # 0..1; FeatureType 26 (promoted for triage/match)
+  place_of_birth:   string?             # 0..1; FeatureType 9 (promoted; no longer folded into remarks)
+  gender:           string?             # 0..1; FeatureType 224, resolved via DetailReference ("Male"/"Female")
+  features:         [SourceFeature]     # 0..N; typed catch-all preserving every other in-scope
+                                        #   list field (Phone, Email, Website, SWIFT/BIC, Digital
+                                        #   Currency Address, D-U-N-S, Organization Type, Additional/
+                                        #   Secondary sanctions info, ...) for analyst triage/match.
+                                        #   Robust to OFAC adding new FeatureTypes; vessel/aircraft
+                                        #   feature types are out of scope. The raw snapshot still
+                                        #   preserves 100% of the XML for faithful reconstruction.
+  remarks:          [string]            # 0..N; genuine free-text remarks only (Req 4.4)
   relationships:    [Relationship]      # 0..N (Req 4.4)
   version_id:       VersionId           # stamped at persist (Req 7.4)
 
-Alias:        { name: string, type?: string, is_primary: bool }
+Alias:        { name: string, type?: string, is_primary: bool, category: STRONG | WEAK }
+              # category is the OFAC screen's "Category": WEAK when Alias/@LowQuality="true",
+              # else STRONG. A weak alias alone should generally not trigger a match.
+SourceFeature:{ type: string, value: string }   # resolved FeatureType label + resolved value
 Address:      { raw: string, country?: string, parts?: map }
 Document:     { type: string, number?: string, issuer?: string }
 PartialDate:  { year: int?, month: int?, day: int?, period?: {from: PartialDate, to: PartialDate} }
@@ -449,7 +462,7 @@ RetentionPolicy:
 A high-level sketch of how the `VersionStore` maps onto local PostgreSQL (kept deliberately loose — column details and the multi-valued modeling are implementation decisions):
 
 - **`versions`** — one row per immutable version. `version_id` = (`publish_date`, `digest`); columns for `source_list`, the counts (`record_count`, `out_of_scope_count`, `overlap_count`, `expected_count`, `persisted_count`), `state` (`HOT`/`COLD`), `ingested_at`, a nullable `raw_snapshot_path` (a **filesystem path** into the local `Raw_Snapshot_Store`, populated only when retention preserves RAW — there is **no** `bytea`/raw-bytes column; the raw snapshot lives on disk per Req 15.8), and `integrity_ok`. Rows are insert-only (Req 7.5).
-- **`records`** — the persisted `Internal_Model` entries, each stamped with its `version_id` (Req 7.4). The multi-valued attributes (aliases, addresses, documents, etc.) are modeled either as child tables or as JSONB columns — this is left as an implementation choice. To back the Query API name search (Req 16.3), the primary-name and alias values are indexed to support case-insensitive **contains** matching (e.g., a trigram/`GIN` index on lowercased primary name and alias values), and the deterministic query ordering (e.g., by `FixedRef`, Req 16.2) is supported by an ordering index; results are constrained to the `CURRENT` `version_id` (Req 16.5).
+- **`records`** — the persisted `Internal_Model` entries, each stamped with its `version_id` (Req 7.4). The multi-valued attributes (aliases, addresses, documents, etc.) are modeled either as child tables or as JSONB columns — this is left as an implementation choice. To back the Query API name search (Req 16.3), the primary-name and alias values are indexed to support case-insensitive **contains** matching (e.g., a trigram/`GIN` index on lowercased primary name and alias values), and the deterministic query ordering (e.g., by `FixedRef`, Req 16.2) is supported by an ordering index; results are constrained to the `CURRENT` `version_id` (Req 16.5). The realized `records` table uses column-per-attribute JSONB for the multi-valued fields, plus dedicated columns for the promoted scalar features (`title`, `place_of_birth`, `gender`) and a `features` JSONB column holding the typed `SourceFeature` catch-all; adding a promoted field is a new column, while new OFAC FeatureTypes flow into `features` without a schema change.
 - **`pointers`** — one row per `source_list` holding the `current`/`previous`/`n_minus_2` `version_id`s, updated atomically in a single transaction (Req 9).
 
 The Query API returns a `Page` shape — `{ records, total, offset, limit }` — where `total` is the exact count of matching `CURRENT` `In_Scope_Records` and `records` is the ordered slice for the requested `offset`/`limit` (Req 16.1).

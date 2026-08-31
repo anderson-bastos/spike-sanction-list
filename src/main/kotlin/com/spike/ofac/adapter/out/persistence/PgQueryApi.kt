@@ -12,6 +12,7 @@ import com.spike.ofac.domain.model.InternalModelEntry
 import com.spike.ofac.domain.model.PartialDate
 import com.spike.ofac.domain.model.Relationship
 import com.spike.ofac.domain.model.Sha256Digest
+import com.spike.ofac.domain.model.SourceFeature
 import com.spike.ofac.domain.model.SourceList
 import com.spike.ofac.domain.model.VersionId
 import com.spike.ofac.application.port.`in`.EmptyQueryException
@@ -176,6 +177,10 @@ class PgQueryApi(
             sanctionPrograms = readList(rs.getString("sanction_programs")),
             remarks = readList(rs.getString("remarks")),
             relationships = readList(rs.getString("relationships")),
+            title = rs.getString("title"),
+            placeOfBirth = rs.getString("place_of_birth"),
+            gender = rs.getString("gender"),
+            features = readList(rs.getString("features")),
             versionId = versionId,
         )
 

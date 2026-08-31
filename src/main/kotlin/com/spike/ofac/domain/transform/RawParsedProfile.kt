@@ -68,6 +68,13 @@ data class RawFeature(
     val datePeriod: RawDatePeriod? = null,
     /** `FeatureVersion/VersionLocation/@LocationID` when present — resolved to an address (Req 4.2). */
     val locationId: String? = null,
+    /**
+     * `FeatureVersion/VersionDetail/@DetailReferenceID` when present — the value is
+     * NOT inline but a key into the top-level `DetailReferenceValues` table (e.g.
+     * Gender → 91526=Male / 91527=Female). Resolved via
+     * [RawReferenceTables.detailReferenceNames].
+     */
+    val detailReferenceId: String? = null,
 )
 
 /**
@@ -154,6 +161,8 @@ data class RawProfileRelationship(
  * @property countryNames       `CountryID` → label (for addresses / nationalities).
  * @property locPartTypeNames   `LocPartTypeID` → label (CITY / STATE/PROVINCE / ...).
  * @property aliasTypeNames     `AliasTypeID` → label (A.K.A. / F.K.A. / Name).
+ * @property detailReferenceNames `DetailReferenceID` → text (from `DetailReferenceValues`,
+ *   e.g. 91526→Male / 91527→Female) — resolves referenced (non-inline) feature values.
  * @property locations          `LocationID` → [RawLocation].
  * @property idRegDocuments     all `IDRegDocument`s (linked to identities).
  * @property sanctionsEntries   all `SanctionsEntry`s (linked to profiles).
@@ -167,6 +176,7 @@ data class RawReferenceTables(
     val countryNames: Map<String, String> = emptyMap(),
     val locPartTypeNames: Map<String, String> = emptyMap(),
     val aliasTypeNames: Map<String, String> = emptyMap(),
+    val detailReferenceNames: Map<String, String> = emptyMap(),
     val locations: Map<String, RawLocation> = emptyMap(),
     val idRegDocuments: List<RawIdRegDocument> = emptyList(),
     val sanctionsEntries: List<RawSanctionsEntry> = emptyList(),

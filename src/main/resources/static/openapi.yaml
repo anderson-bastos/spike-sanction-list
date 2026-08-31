@@ -186,6 +186,7 @@ components:
       - citizenships
       - documents
       - entityType
+      - features
       - fixedRef
       - nationalities
       - primaryName
@@ -239,8 +240,31 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Relationship"
+        title:
+          type: string
+          nullable: true
+        placeOfBirth:
+          type: string
+          nullable: true
+        gender:
+          type: string
+          nullable: true
+        features:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceFeature"
         versionId:
           $ref: "#/components/schemas/VersionId"
+    SourceFeature:
+      required:
+      - type
+      - value
+      type: object
+      properties:
+        type:
+          type: string
+        value:
+          type: string
     Page:
       required:
       - limit

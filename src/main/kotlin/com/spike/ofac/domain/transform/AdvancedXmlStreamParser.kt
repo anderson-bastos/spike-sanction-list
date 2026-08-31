@@ -83,6 +83,7 @@ class AdvancedXmlStreamParser {
         val countryNames = HashMap<String, String>()
         val locPartTypeNames = HashMap<String, String>()
         val aliasTypeNames = HashMap<String, String>()
+        val detailReferenceNames = HashMap<String, String>()
         val locations = HashMap<String, RawLocation>()
         val idRegDocuments = ArrayList<RawIdRegDocument>()
         val sanctionsEntries = ArrayList<RawSanctionsEntry>()
@@ -103,6 +104,9 @@ class AdvancedXmlStreamParser {
                 "Country" -> putIdText(reader, countryNames)
                 "LocPartType" -> putIdText(reader, locPartTypeNames)
                 "AliasType" -> putIdText(reader, aliasTypeNames)
+                // DetailReferenceValues: <DetailReference ID="..">text</DetailReference>,
+                // the lookup table for referenced (non-inline) feature values (e.g. Gender).
+                "DetailReference" -> putIdText(reader, detailReferenceNames)
 
                 "Location" -> readLocation(reader)?.let { locations[it.locationId] = it }
                 "IDRegDocument" -> idRegDocuments += readIdRegDocument(reader)
@@ -124,6 +128,7 @@ class AdvancedXmlStreamParser {
                 countryNames = countryNames,
                 locPartTypeNames = locPartTypeNames,
                 aliasTypeNames = aliasTypeNames,
+                detailReferenceNames = detailReferenceNames,
                 locations = locations,
                 idRegDocuments = idRegDocuments,
                 sanctionsEntries = sanctionsEntries,
@@ -309,6 +314,7 @@ class AdvancedXmlStreamParser {
         var detailValue: String? = null
         var datePeriod: RawDatePeriod? = null
         var locationId: String? = null
+        var detailReferenceId: String? = null
         val end = "Feature"
         while (reader.hasNext()) {
             val event = reader.next()
@@ -317,16 +323,22 @@ class AdvancedXmlStreamParser {
                     "DatePeriod" -> if (datePeriod == null) datePeriod = readDatePeriod(reader)
                     "VersionLocation" -> if (locationId == null) locationId = reader.attr("LocationID")
                     "VersionDetail" -> {
+                        // A VersionDetail carries EITHER inline text OR a DetailReferenceID
+                        // that keys the DetailReferenceValues table (e.g. Gender). Capture
+                        // the reference before reading text, since getElementText advances
+                        // past the (possibly self-closing) element.
+                        val refId = reader.attr("DetailReferenceID")
+                        if (refId != null && detailReferenceId == null) detailReferenceId = refId
                         val text = readElementText(reader).trim()
                         if (text.isNotEmpty() && detailValue == null) detailValue = text
                     }
                 }
                 XMLStreamConstants.END_ELEMENT -> if (reader.localName == end) {
-                    return RawFeature(featureId, featureTypeId, detailValue, datePeriod, locationId)
+                    return RawFeature(featureId, featureTypeId, detailValue, datePeriod, locationId, detailReferenceId)
                 }
             }
         }
-        return RawFeature(featureId, featureTypeId, detailValue, datePeriod, locationId)
+        return RawFeature(featureId, featureTypeId, detailValue, datePeriod, locationId, detailReferenceId)
     }
 
     /**

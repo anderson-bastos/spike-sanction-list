@@ -122,6 +122,20 @@ data class PartialDate(
 }
 
 /**
+ * A generic, typed list feature carried on a profile that does not have a
+ * dedicated named field (Req 4.4). `type` is the resolved `FeatureType` label
+ * (e.g. "Phone Number", "Email Address", "Website", "SWIFT/BIC",
+ * "Digital Currency Address - XBT"); `value` is the resolved feature value
+ * (inline text or a resolved `DetailReference`). This preserves every remaining
+ * in-scope list field for analyst triage without a rigid column-per-type
+ * explosion, and is robust to OFAC introducing new feature types.
+ */
+data class SourceFeature(
+    val type: String,
+    val value: String,
+)
+
+/**
  * A relationship to another party (`ProfileRelationship`), referencing the
  * related party by its [FixedRef] and carrying the source's relation label.
  */
@@ -180,6 +194,19 @@ data class InternalModelEntry(
     val sanctionPrograms: List<String>,
     val remarks: List<String> = emptyList(),
     val relationships: List<Relationship> = emptyList(),
+    /** Title feature (FeatureType 26), 0..1; `null` when absent. */
+    val title: String? = null,
+    /** Place of Birth feature (FeatureType 9), 0..1; `null` when absent. */
+    val placeOfBirth: String? = null,
+    /** Gender feature (FeatureType 224, resolved via DetailReference → "Male"/"Female"), 0..1. */
+    val gender: String? = null,
+    /**
+     * Every other in-scope feature with a resolvable scalar value that is not
+     * already represented by a dedicated field (0..N, Req 4.4). Preserves the
+     * remaining OFAC list fields (phone, email, website, digital currency
+     * addresses, SWIFT/BIC, ...) for analyst triage/matching.
+     */
+    val features: List<SourceFeature> = emptyList(),
     val versionId: VersionId? = null,
 ) {
     init {

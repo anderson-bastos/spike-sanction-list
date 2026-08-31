@@ -56,6 +56,7 @@ Cada `Source_List` tem sua **própria linha de versões**, independente das dema
 - **CURRENT / PREVIOUS / N_MINUS_2** — as 3 versões operacionais (HOT) mais recentes de uma lista. A ativação repointa `CURRENT` atomicamente; versões deslocadas além de `N_MINUS_2` viram **COLD**.
 - **Raw_Snapshot_Store** — pasta local versionada com o snapshot bruto (nome derivado de `Publish_Date`+`Digest`); **nunca** gravado no banco. Base para reconstrução fiel.
 - **In_Scope_Records** — registros no escopo: apenas `Individual` e `Entity` (vessels e aircraft excluídos). É o que a API serve a partir de `CURRENT`.
+- **Campos do registro** — cada registro traz nome principal, aliases (com **category** `strong`/`weak`), endereços, documentos, nacionalidade/cidadania, datas de nascimento, programas de sanção, e os campos promovidos **`title` / `placeOfBirth` / `gender`**. Todos os demais campos da lista (Phone, Email, Website, SWIFT/BIC, Digital Currency Address, D-U-N-S, etc.) são preservados numa lista tipada **`features[] = {type, value}`** para triagem/match, robusta a novos tipos da OFAC.
 - **Data_Store** — PostgreSQL local: modelo interno + metadados de versão + ponteiros.
 
 ## Arquitetura em 30s
@@ -121,7 +122,7 @@ Somente leitura, serve **apenas a versão `CURRENT`**. Base: `http://localhost:8
   curl "http://localhost:8080/api/SDN/records?offset=0&limit=50"
   ```
 
-- **Buscar por nome** (case-insensitive, *contains* sobre nome principal + apelidos):
+- **Buscar por nome ou alias** (paginado; case-insensitive, *contains* sobre nome principal **e** apelidos, num só parâmetro `q`):
 
   ```bash
   curl "http://localhost:8080/api/SDN/records/search?q=ivan"

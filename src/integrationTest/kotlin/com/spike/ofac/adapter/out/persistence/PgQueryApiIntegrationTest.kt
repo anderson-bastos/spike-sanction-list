@@ -322,6 +322,44 @@ class PgQueryApiIntegrationTest {
     }
 
     @Test
+    fun `title placeOfBirth gender and the features list round-trip through JSONB persistence`() {
+        val record = InternalModelEntry(
+            fixedRef = FixedRef("777"),
+            entityType = EntityType.Individual,
+            primaryName = "Jane Doe",
+            sanctionPrograms = listOf("PROGRAM"),
+            title = "Minister of Defense",
+            placeOfBirth = "Tehran, Iran",
+            gender = "Female",
+            features = listOf(
+                com.spike.ofac.domain.model.SourceFeature("Phone Number", "+1-202-555-0147"),
+                com.spike.ofac.domain.model.SourceFeature("Digital Currency Address - XBT", "1abc...xyz"),
+            ),
+        )
+        activate(vid('a'), record)
+
+        val readBack = queryApi.list(SourceList.SDN, offset = 0, limit = 50).records.single()
+        readBack.title shouldBe "Minister of Defense"
+        readBack.placeOfBirth shouldBe "Tehran, Iran"
+        readBack.gender shouldBe "Female"
+        readBack.features shouldContainExactly listOf(
+            com.spike.ofac.domain.model.SourceFeature("Phone Number", "+1-202-555-0147"),
+            com.spike.ofac.domain.model.SourceFeature("Digital Currency Address - XBT", "1abc...xyz"),
+        )
+    }
+
+    @Test
+    fun `absent title placeOfBirth gender persist as null and features defaults to empty`() {
+        activate(vid('a'), entry("1", "Alice"))
+
+        val readBack = queryApi.list(SourceList.SDN, offset = 0, limit = 50).records.single()
+        readBack.title shouldBe null
+        readBack.placeOfBirth shouldBe null
+        readBack.gender shouldBe null
+        readBack.features shouldContainExactly emptyList()
+    }
+
+    @Test
     fun `list pagination is deterministic and ordered by FixedRef over CURRENT`() {
         activate(
             vid('a'),

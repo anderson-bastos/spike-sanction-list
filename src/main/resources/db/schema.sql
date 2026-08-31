@@ -120,6 +120,17 @@ CREATE TABLE IF NOT EXISTS records (
     sanction_programs   JSONB       NOT NULL DEFAULT '[]'::jsonb,
     remarks             JSONB       NOT NULL DEFAULT '[]'::jsonb,
     relationships       JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    -- Generic, typed catch-all for every other in-scope list feature that lacks a
+    -- dedicated column (phone, email, website, digital currency addresses,
+    -- SWIFT/BIC, ...). Kept as JSONB (implementation choice — see header) so new
+    -- OFAC feature types flow through without a column-per-type explosion.
+    features            JSONB       NOT NULL DEFAULT '[]'::jsonb,
+
+    -- Promoted 0..1 scalar features for analyst triage/matching. Nullable because
+    -- a profile may omit them (e.g. entities have no gender/place of birth).
+    title               TEXT        NULL,
+    place_of_birth      TEXT        NULL,
+    gender              TEXT        NULL,
 
     -- Derived searchable columns for case-insensitive CONTAINS name search (Req 16.3).
     --

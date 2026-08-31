@@ -350,6 +350,119 @@ class TransformEdgeCasesTest {
         ok.entries.single().addresses.single().raw shouldBe "Mexico City"
     }
 
+    // --- Promoted named features + generic features[] catch-all --------------
+
+    /**
+     * A [ParsedSnapshot] for a single in-scope individual carrying the given
+     * features, with a resolvable program and the given reference tables (merged
+     * with the sanctions entry so Req 4.4 is satisfied).
+     */
+    private fun snapshotForFeatures(
+        features: List<RawFeature>,
+        featureTypeNames: Map<String, String>,
+        detailReferenceNames: Map<String, String> = emptyMap(),
+    ): ParsedSnapshot {
+        val profile = individual(
+            fixedRef = "42",
+            profileId = "p1",
+            aliases = listOf(primaryName("Jane Doe")),
+        ).copy(features = features)
+        return ParsedSnapshot(
+            publishDate = null,
+            profiles = listOf(profile),
+            references = RawReferenceTables(
+                featureTypeNames = featureTypeNames,
+                detailReferenceNames = detailReferenceNames,
+                sanctionsEntries = listOf(
+                    RawSanctionsEntry(id = "e1", profileId = "p1", listId = null, programNames = listOf("SDGT")),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `Title feature is promoted to the title field, not remarks`() {
+        val snapshot = snapshotForFeatures(
+            features = listOf(RawFeature(featureId = "f1", featureTypeId = "26", detailValue = "Minister of Defense")),
+            featureTypeNames = mapOf("26" to "Title"),
+        )
+
+        val entry = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>().entries.single()
+
+        entry.title shouldBe "Minister of Defense"
+        entry.remarks.shouldBeEmpty()
+        entry.features.shouldBeEmpty()
+    }
+
+    @Test
+    fun `Place of Birth feature is promoted to placeOfBirth and no longer dumped into remarks`() {
+        val snapshot = snapshotForFeatures(
+            features = listOf(RawFeature(featureId = "f1", featureTypeId = "9", detailValue = "Tehran, Iran")),
+            featureTypeNames = mapOf("9" to "Place of Birth"),
+        )
+
+        val entry = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>().entries.single()
+
+        entry.placeOfBirth shouldBe "Tehran, Iran"
+        // Regression: remarks must NOT carry the old "Place of Birth: ..." dump.
+        entry.remarks.shouldBeEmpty()
+        entry.features.shouldBeEmpty()
+    }
+
+    @Test
+    fun `Gender feature carried as a DetailReference resolves to Male via the lookup table`() {
+        val snapshot = snapshotForFeatures(
+            features = listOf(RawFeature(featureId = "f1", featureTypeId = "224", detailReferenceId = "91526")),
+            featureTypeNames = mapOf("224" to "Gender"),
+            detailReferenceNames = mapOf("91526" to "Male", "91527" to "Female"),
+        )
+
+        val entry = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>().entries.single()
+
+        entry.gender shouldBe "Male"
+        entry.remarks.shouldBeEmpty()
+        entry.features.shouldBeEmpty()
+    }
+
+    @Test
+    fun `other in-scope features become typed entries in features not remarks`() {
+        val snapshot = snapshotForFeatures(
+            features = listOf(
+                RawFeature(featureId = "f1", featureTypeId = "524", detailValue = "+1-202-555-0147"),
+                RawFeature(featureId = "f2", featureTypeId = "344", detailValue = "1abc...xyz"),
+            ),
+            featureTypeNames = mapOf(
+                "524" to "Phone Number",
+                "344" to "Digital Currency Address - XBT",
+            ),
+        )
+
+        val entry = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>().entries.single()
+
+        entry.features shouldBe listOf(
+            com.spike.ofac.domain.model.SourceFeature("Phone Number", "+1-202-555-0147"),
+            com.spike.ofac.domain.model.SourceFeature("Digital Currency Address - XBT", "1abc...xyz"),
+        )
+        // These no longer pollute remarks.
+        entry.remarks.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a second Title beyond the first is kept in features rather than dropped`() {
+        val snapshot = snapshotForFeatures(
+            features = listOf(
+                RawFeature(featureId = "f1", featureTypeId = "26", detailValue = "Minister"),
+                RawFeature(featureId = "f2", featureTypeId = "26", detailValue = "General"),
+            ),
+            featureTypeNames = mapOf("26" to "Title"),
+        )
+
+        val entry = transform.fromParsed(snapshot).shouldBeInstanceOf<TransformResult.Ok>().entries.single()
+
+        entry.title shouldBe "Minister"
+        entry.features shouldBe listOf(com.spike.ofac.domain.model.SourceFeature("Title", "General"))
+    }
+
     @Test
     fun `one unparseable in-scope record fails the whole stage - no valid records survive (Req 4_8)`() {
         // A perfectly good record alongside one unbuildable record: the stage must
