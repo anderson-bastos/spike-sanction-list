@@ -29,3 +29,10 @@ bin/
 # --- Python ---
 __pycache__/
 *.pyc
+
+# --- Secrets / chaves (NUNCA versionar) ---
+*.pem
+*.key
+
+# --- macOS ---
+.DS_Store
