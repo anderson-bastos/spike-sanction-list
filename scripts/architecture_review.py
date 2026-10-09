@@ -1,148 +1,169 @@
 #!/usr/bin/env python3
-"""Architecture Reviewer — runs the code-architecture-reviewer agent over the repo.
-
-Invoked by .github/workflows/architecture-review.yml (manual workflow_dispatch).
-
-It loads the agent persona from .github/agents/code-architecture-reviewer.agent.md,
-gathers repository context (tree + the most recent diff), asks an OpenAI model to
-produce an architecture review following that persona, prints the review to the
-Actions log, and — when PUBLISH_ISSUES=true — opens a single GitHub issue with the
-review using the GitHub App token.
-
-Environment:
-  OPENAI_API_KEY   (required) OpenAI API key.
-  OPENAI_MODEL     (optional) model name; default "gpt-4o-mini".
-  GH_APP_TOKEN     (optional) GitHub App installation token (needs issues:write)
-                   — required only when PUBLISH_ISSUES=true.
-  GITHUB_REPOSITORY(provided by Actions) "owner/repo".
-  PUBLISH_ISSUES   (optional) "true" to open an issue; anything else = log only.
-
-Exit codes: 0 on success (review produced), 2 on configuration error.
-"""
-from __future__ import annotations
-
+"""Read-only architecture review; optional GitHub issue publication."""
+import hashlib
+import json
 import os
-import subprocess
-import sys
+import re
+from pathlib import Path
+
+import requests
+from openai import OpenAI
+
+ROOT = Path(__file__).resolve().parents[1]
+REPORT = ROOT / "architecture-review-results.json"
+EXTENSIONS = {".kt", ".java", ".kts", ".yml", ".yaml", ".properties", ".sql"}
+EXCLUDED = {".git", ".gradle", "build", "target", "node_modules", ".idea", "out"}
+MAX_FILES = 75
+MAX_FILE_CHARS = 10000
+MAX_TOTAL_CHARS = 130000
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 
-AGENT_FILE = ".github/agents/code-architecture-reviewer.agent.md"
-DEFAULT_MODEL = "gpt-4o-mini"
-MAX_DIFF_CHARS = 60_000  # keep the prompt within sane bounds
+def collect_files():
+    files = []
+    total = 0
+    for path in sorted(ROOT.rglob("*")):
+        if not path.is_file() or path.suffix not in EXTENSIONS:
+            continue
+        if any(part in EXCLUDED for part in path.relative_to(ROOT).parts):
+            continue
+        if len(files) >= MAX_FILES or total >= MAX_TOTAL_CHARS:
+            break
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (UnicodeError, OSError):
+            continue
+        if not content.strip():
+            continue
+        content = content[: min(MAX_FILE_CHARS, MAX_TOTAL_CHARS - total)]
+        relative = str(path.relative_to(ROOT))
+        files.append({"path": relative, "content": content, "lines": content.splitlines()})
+        total += len(content)
+    return files
 
 
-def fail(msg: str, code: int = 2) -> "None":
-    print(f"::error::{msg}")
-    sys.exit(code)
+def load_instructions():
+    path = ROOT / ".github/agents/code-architecture-reviewer.agent.md"
+    if path.is_file():
+        return path.read_text(encoding="utf-8")[:25000]
+    return ("You are a senior architecture reviewer for Kotlin, Java, Spring Boot, "
+            "DDD and Hexagonal Architecture. Be evidence-based and conservative.")
 
 
-def run(cmd: list[str]) -> str:
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
-    except Exception as exc:  # pragma: no cover - defensive
-        print(f"::warning::command failed {cmd}: {exc}")
-        return ""
-
-
-def read_agent_persona() -> str:
-    if not os.path.exists(AGENT_FILE):
-        fail(f"agent persona file not found: {AGENT_FILE}")
-    with open(AGENT_FILE, encoding="utf-8") as fh:
-        return fh.read()
-
-
-def gather_context() -> str:
-    # Repo tree (tracked files only) + the most recent commit diff. The workflow is
-    # manual (workflow_dispatch), so there is no PR diff; HEAD~1..HEAD is the most
-    # recent change set. Falls back to the full HEAD if there is only one commit.
-    tree = run(["git", "ls-files"])
-    log = run(["git", "log", "--oneline", "-10"])
-    diff = run(["git", "diff", "HEAD~1", "HEAD"]) or run(["git", "show", "HEAD"])
-    if len(diff) > MAX_DIFF_CHARS:
-        diff = diff[:MAX_DIFF_CHARS] + "\n... [diff truncated] ..."
-    return (
-        "## Repository file tree (tracked)\n" + tree
-        + "\n## Recent commits\n" + log
-        + "\n## Most recent diff (HEAD~1..HEAD)\n" + diff
+def analyze(files):
+    inventory = "\n\n".join(
+        f"FILE: {f['path']}\n" + "\n".join(
+            f"{i}: {line}" for i, line in enumerate(f["lines"], 1)
+        ) for f in files
     )
-
-
-def build_prompt(persona: str, context: str) -> list[dict]:
-    system = (
-        persona
-        + "\n\n---\nYou are running non-interactively in CI. Produce a concise, "
-        "actionable architecture review in Markdown, following the checklist and "
-        "report format in the persona above. If you cannot see a violation, say so "
-        "explicitly rather than inventing one."
+    prompt = (
+        "Review ONLY the provided source files. Do not assume unseen behavior. "
+        "Report concrete, actionable architecture/performance/reliability/security defects. "
+        "Avoid style-only suggestions. Return at most 12 findings. "
+        "For each finding, cite an exact file and line present in the input. "
+        "Use this JSON schema: {\"findings\": [{\"title\": str, "
+        "\"severity\": \"high|medium|low\", \"file\": str, "
+        "\"line\": int, \"evidence\": str, \"impact\": str, "
+        "\"recommendation\": str, \"tests\": str}]}. "
+        "If evidence is insufficient, omit the finding.\n\n" + inventory
     )
-    user = (
-        "Review the current state of this repository and its most recent change set. "
-        "Repository context follows.\n\n" + context
+    client = OpenAI()
+    response = client.chat.completions.create(
+        model=MODEL,
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": load_instructions()},
+            {"role": "user", "content": prompt},
+        ],
     )
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+    result = json.loads(response.choices[0].message.content)
+    if not isinstance(result, dict) or not isinstance(result.get("findings"), list):
+        raise ValueError("Invalid model response: findings list missing")
+    return result["findings"]
 
 
-def call_openai(messages: list[dict]) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        fail("OPENAI_API_KEY is not set")
-    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
-    try:
-        from openai import OpenAI
-    except ImportError:
-        fail("the 'openai' package is not installed (pip install openai)")
-    client = OpenAI(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.2,
-    )
-    return resp.choices[0].message.content or "(empty review)"
+def validate(findings, files):
+    index = {f["path"]: f for f in files}
+    validated = []
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        try:
+            path = item["file"]
+            line = int(item["line"])
+            severity = item["severity"].lower()
+            if path not in index or not (1 <= line <= len(index[path]["lines"])):
+                continue
+            if severity not in {"high", "medium", "low"}:
+                continue
+            if not all(isinstance(item.get(k), str) and item[k].strip()
+                       for k in ("title", "evidence", "impact", "recommendation", "tests")):
+                continue
+            snippet = index[path]["lines"][line - 1].strip()
+            if not snippet:
+                continue
+            key = hashlib.sha256(f"{path}:{item['title'].strip().lower()}".encode()).hexdigest()[:16]
+            validated.append({**item, "line": line, "severity": severity,
+                              "source_line": snippet, "finding_id": key})
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue
+    return validated[:12]
 
 
-def publish_issue(title: str, body: str) -> "None":
+def publish(findings):
     token = os.environ.get("GH_APP_TOKEN")
     repo = os.environ.get("GITHUB_REPOSITORY")
-    if not token or not repo:
-        print("::warning::PUBLISH_ISSUES requested but GH_APP_TOKEN/GITHUB_REPOSITORY missing; skipping issue creation.")
-        return
-    import requests
-
-    url = f"https://api.github.com/repos/{repo}/issues"
-    headers = {
+    if not token or not repo or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        raise RuntimeError("GH_APP_TOKEN and GITHUB_REPOSITORY are required to publish")
+    session = requests.Session()
+    session.headers.update({
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-    }
-    r = requests.post(url, headers=headers, json={"title": title, "body": body, "labels": ["architecture-review"]})
-    if r.status_code >= 300:
-        print(f"::warning::failed to create issue ({r.status_code}): {r.text[:300]}")
+    })
+    base = f"https://api.github.com/repos/{repo}/issues"
+    existing = set()
+    page = 1
+    while True:
+        response = session.get(base, params={"state": "all", "per_page": 100, "page": page}, timeout=30)
+        response.raise_for_status()
+        batch = response.json()
+        for issue in batch:
+            if "pull_request" not in issue:
+                existing.update(re.findall(r"ARCH-REVIEW-ID:([0-9a-f]{16})", issue.get("body") or ""))
+        if len(batch) < 100:
+            break
+        page += 1
+    for f in findings:
+        if f["finding_id"] in existing:
+            print(f"Skipping duplicate: {f['title']}")
+            continue
+        body = (f"**Severity:** {f['severity']}\n\n"
+                f"**Evidence:** `{f['file']}:{f['line']}`\n\n"
+                f"```\n{f['source_line']}\n```\n\n"
+                f"{f['evidence']}\n\n**Impact:** {f['impact']}\n\n"
+                f"**Recommendation:** {f['recommendation']}\n\n"
+                f"**Suggested tests:** {f['tests']}\n\n"
+                f"<!-- ARCH-REVIEW-ID:{f['finding_id']} -->")
+        response = session.post(base, json={"title": f"[Architecture Review] {f['title'][:180]}", "body": body}, timeout=30)
+        response.raise_for_status()
+        print("Created issue:", response.json()["html_url"])
+
+
+def main():
+    files = collect_files()
+    if not files:
+        raise RuntimeError("No source files found")
+    print(f"Reviewing {len(files)} files with {MODEL}")
+    findings = validate(analyze(files), files)
+    REPORT.write_text(json.dumps({"model": MODEL, "files_reviewed": len(files),
+                                  "findings": findings}, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Validated {len(findings)} findings; report: {REPORT}")
+    if os.getenv("PUBLISH_ISSUES", "false").lower() == "true":
+        publish(findings)
     else:
-        print(f"::notice::opened issue: {r.json().get('html_url')}")
-
-
-def main() -> "None":
-    persona = read_agent_persona()
-    context = gather_context()
-    review = call_openai(build_prompt(persona, context))
-
-    print("\n===== ARCHITECTURE REVIEW =====\n")
-    print(review)
-    print("\n===== END REVIEW =====\n")
-
-    # Also surface it in the Actions job summary when available.
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write("# Architecture Review\n\n" + review + "\n")
-
-    if os.environ.get("PUBLISH_ISSUES", "").lower() == "true":
-        publish_issue("Architecture review", review)
-    else:
-        print("::notice::PUBLISH_ISSUES not true — review logged only, no issue created.")
+        print("Dry run: no issues created")
 
 
 if __name__ == "__main__":
