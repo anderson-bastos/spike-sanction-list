@@ -25,3 +25,7 @@ data/
 
 # --- Eclipse/VSCode compiled output ---
 bin/
+
+# --- Python ---
+__pycache__/
+*.pyc
