@@ -1,0 +1,66 @@
+name: Architecture Review
+
+# Dispara a revisão de arquitetura em cada Pull Request. O job usa o GitHub
+# Environment "architecture-reviewer" (criado em Settings -> Environments), de
+# onde vêm as credenciais/secrets que o agente precisa (ver passo 1 do seu guia).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Permissões mínimas para o agente comentar o PR e, se desejado, abrir issues.
+# Ajuste conforme o que o seu agente realmente faz.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Acessa as credenciais do Environment "architecture-reviewer".
+    environment: architecture-reviewer
+    steps:
+      - name: Checkout (histórico completo p/ diff do PR)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validar a arquitetura (fitness functions do próprio repo)
+        # Guarda objetiva e determinística: o ArchUnit (HexagonalArchitectureTest)
+        # e o teste de contrato OpenAPI já falham o build se a regra de dependência
+        # ou o contrato forem violados. Isto roda SEM depender de IA.
+        run: ./gradlew test --tests "com.spike.ofac.architecture.*"
+
+      # -----------------------------------------------------------------------
+      # TODO (preencher com o invocador real do SEU agente):
+      #
+      # O arquivo .github/agents/code-architecture-reviewer.agent.md define a
+      # persona de revisão. O STEP que invoca o agente depende da GitHub App que
+      # você instalou (installation 169716435) — NÃO foi preenchido aqui porque o
+      # comando/action exato varia por app e inventá-lo faria o job falhar.
+      #
+      # Exemplos de como esse step costuma ser (escolha o que corresponde à sua app):
+      #
+      #   # (a) Via uma action oficial do agente, lendo o .agent.md:
+      #   - name: Run architecture reviewer agent
+      #     uses: <org>/<agent-action>@v1
+      #     with:
+      #       agent-file: .github/agents/code-architecture-reviewer.agent.md
+      #       github-token: ${{ secrets.GITHUB_TOKEN }}
+      #
+      #   # (b) Via gh CLI chamando a API do agente, usando um secret do Environment:
+      #   - name: Run architecture reviewer agent
+      #     env:
+      #       AGENT_TOKEN: ${{ secrets.ARCHITECTURE_REVIEWER_TOKEN }}
+      #     run: |
+      #       # chamada à app/endpoint do agente, passando o diff do PR e o .agent.md
+      #       echo "preencher conforme a doc da sua GitHub App"
+      #
+      # Ao preencher, dê ao agente: o diff do PR, o .agent.md como instrução, e
+      # (se for comentar/abrir issue) o token com as permissões acima.
+      # -----------------------------------------------------------------------
+
+      - name: Lembrete (placeholder do agente não configurado)
+        run: |
+          echo "::notice::O step de invocação do agente de IA ainda é um placeholder."
+          echo "::notice::Preencha o TODO em .github/workflows/architecture-review.yml com o invocador da sua GitHub App."
