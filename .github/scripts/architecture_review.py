@@ -9,7 +9,7 @@ from pathlib import Path
 import requests
 from openai import OpenAI
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]  # .github/scripts/ -> repo root
 REPORT = ROOT / "architecture-review-results.json"
 EXTENSIONS = {".kt", ".java", ".kts", ".yml", ".yaml", ".properties", ".sql"}
 EXCLUDED = {".git", ".gradle", "build", "target", "node_modules", ".idea", "out"}

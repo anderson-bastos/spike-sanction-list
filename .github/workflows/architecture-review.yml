@@ -42,4 +42,4 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_APP_TOKEN: ${{ steps.app-token.outputs.token }}
           PUBLISH_ISSUES: ${{ inputs.publish_issues }}
-        run: python scripts/architecture_review.py
+        run: python .github/scripts/architecture_review.py
