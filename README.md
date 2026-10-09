@@ -110,7 +110,7 @@ Detalhes em [`.kiro/steering/structure.md`](.kiro/steering/structure.md).
 
    Sem o profile `bootstrap`, a app sobe normal e o scheduler conduz a ingestão no intervalo configurado (padrão 6h).
 
-Runbook detalhado em [`.kiro/steering/operations.md`](.kiro/steering/operations.md).
+Guia completo para quem vai **operar** o sistema (subir, acompanhar imports, consultar, diagnosticar, parar): [**Guia do Operador**](.kiro/docs/operations-guide.md). Runbook enxuto para o agente em [`.kiro/steering/operations.md`](.kiro/steering/operations.md).
 
 ### Consultar um sancionado (API)
 
@@ -167,6 +167,7 @@ O sistema **guarda** as versões (CURRENT/PREVIOUS/N_MINUS_2 + COLD retido), ent
 
 | Documento | Para quê |
 | --------- | -------- |
+| [`.kiro/docs/operations-guide.md`](.kiro/docs/operations-guide.md) | **Guia do Operador** — subir, operar, consultar, diagnosticar (não exige ler o código) |
 | [`.kiro/specs/ofac-sanctions-ingestion/requirements.md`](.kiro/specs/ofac-sanctions-ingestion/requirements.md) | Requisitos |
 | [`.kiro/specs/ofac-sanctions-ingestion/design.md`](.kiro/specs/ofac-sanctions-ingestion/design.md) | Design técnico + 20 propriedades de correção |
 | [`.kiro/specs/ofac-sanctions-ingestion/tasks.md`](.kiro/specs/ofac-sanctions-ingestion/tasks.md) | Plano de implementação |
