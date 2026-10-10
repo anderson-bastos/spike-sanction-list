@@ -168,6 +168,7 @@ O sistema **guarda** as versões (CURRENT/PREVIOUS/N_MINUS_2 + COLD retido), ent
 | Documento | Para quê |
 | --------- | -------- |
 | [`.kiro/docs/operations-guide.md`](.kiro/docs/operations-guide.md) | **Guia do Operador** — subir, operar, consultar, diagnosticar (não exige ler o código) |
+| [`.kiro/docs/architecture-reviewer.md`](.kiro/docs/architecture-reviewer.md) | **Agente Revisor de Arquitetura** — agente + workflow + script, configuração e passo a passo |
 | [`.kiro/specs/ofac-sanctions-ingestion/requirements.md`](.kiro/specs/ofac-sanctions-ingestion/requirements.md) | Requisitos |
 | [`.kiro/specs/ofac-sanctions-ingestion/design.md`](.kiro/specs/ofac-sanctions-ingestion/design.md) | Design técnico + 20 propriedades de correção |
 | [`.kiro/specs/ofac-sanctions-ingestion/tasks.md`](.kiro/specs/ofac-sanctions-ingestion/tasks.md) | Plano de implementação |
